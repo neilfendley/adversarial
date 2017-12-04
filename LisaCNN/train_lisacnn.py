@@ -190,7 +190,6 @@ def main(argv=None):
         eval_params = {'batch_size': FLAGS.batch_size}
         X_test_adv, = batch_eval(sess, [x], [adv_x], [X_test], args=eval_params)
 
-        # Evaluate the accuracy of the CIFAR10 model on adversarial examples
         accuracy = model_eval(sess, x, y, predictions, X_test_adv, Y_test,
                               args=eval_params)
         print('Test accuracy on adversarial examples: ' + str(accuracy))
@@ -219,7 +218,7 @@ def main(argv=None):
                     predictions_adv=predictions_2_adv, evaluate=evaluate_2,
                     args=train_params)
 
-        # Evaluate the accuracy of the CIFAR10 model on adversarial examples
+       
         accuracy = model_eval(sess, x, y, predictions_2_adv, X_test, Y_test,
                               args=eval_params)
         print('Test accuracy on adversarial examples: ' + str(accuracy))
