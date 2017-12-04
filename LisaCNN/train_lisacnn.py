@@ -1,11 +1,6 @@
 #!/usr/bin/env python
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-from __future__ import unicode_literals
 import random
 import keras
-from keras import backend
 from keras.utils import np_utils
 import pdb
 from sklearn.metrics import confusion_matrix
@@ -23,17 +18,17 @@ from cleverhans.utils_tf import model_train, model_eval, batch_eval
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string('train_dir', './tmp_pub', 'Directory storing the saved model.')
+flags.DEFINE_string('train_dir', 'train', 'Directory storing the saved model.')
 flags.DEFINE_string('data_dir','/home/fendlnm1/Fendley/street_signs/signDatabase/annotations', 'The Directory in which the extra lisadataset is')
 flags.DEFINE_string(
-    'filename', '/lisacnn.ckpt', 'Filename to save model under.')
+    'filename', 'lisacnn.ckpt', 'Filename to save model under.')
 flags.DEFINE_integer('nb_epochs', 60, 'Number of epochs to train model')
 flags.DEFINE_integer('nb_classes', 48, 'Number of classes')
 flags.DEFINE_integer('batch_size', 128, 'Size of training batches')
 flags.DEFINE_float('learning_rate', 0.0001, 'Learning rate for training')
 flags.DEFINE_bool('DO_CONF', False, 'Generate the confusion matrix on the test set')
 flags.DEFINE_bool('DO_ADV', False, 'Generate the adversarial examples on the test set')
-flags.DEFINE_bool('force_retrain', True, 'Ignore if you have already trained a model')
+flags.DEFINE_bool('force_retrain', False, 'Ignore if you have already trained a model')
 
 def load_lisa_data():
     """
@@ -135,7 +130,6 @@ def main(argv=None):
 
     # Create TF session and set as Keras backend session
     sess = tf.Session()
-    keras.backend.set_session(sess)
     
     X_train, Y_train, X_test, Y_test = data_lisa()
 
@@ -170,7 +164,7 @@ def main(argv=None):
     }
     # If we have already trained a model, load it 
 
-    save_string = os.path.join(FLAGS.train_dir + FLAGS.filename)
+    save_string = os.path.join(FLAGS.train_dir,FLAGS.filename)
     if tf.train.checkpoint_exists(save_string) and not FLAGS.force_retrain:
         saver.restore(sess, save_string)
     else:
