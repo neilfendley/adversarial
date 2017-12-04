@@ -1,7 +1,7 @@
 # LisaCNN 
 This is code modified from cleverhans to create a basic CNN model and train it on the LISA street signs dataset
 ### Links:
-http://cvrr.ucsd.edu/LISA/lisa-traffic-sign-dataset.html
+http://cvrr.ucsd.edu/LISA/lisa-traffic-sign-dataset.html   
 https://arxiv.org/abs/1707.08945
 ### Dependencies 
 OpenCv
