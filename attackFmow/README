@@ -1,0 +1,4 @@
+Currently uncommented and unclean
+
+Requires a copy of https://github.com/titu1994/DenseNet in this folder, as well as 
+cnn_image_only.model from https://github.com/fMoW/baseline/releases
