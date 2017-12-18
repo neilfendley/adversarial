@@ -12,13 +12,13 @@ import tensorflow as tf
 from tensorflow.python.platform import app
 from tensorflow.python.platform import flags
 import numpy as np
-from cleverhans.attacks import fgsm
+from cleverhans.attacks import FastGradientMethod
 from cleverhans.utils_keras import cnn_model
 from cleverhans.utils_tf import model_train, model_eval, batch_eval
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string('train_dir', 'train', 'Directory storing the saved model.')
+flags.DEFINE_string('train_dir', 'tmp', 'Directory storing the saved model.')
 flags.DEFINE_string('data_dir','/home/fendlnm1/Fendley/street_signs/signDatabase/annotations', 'The Directory in which the extra lisadataset is')
 flags.DEFINE_string(
     'filename', 'lisacnn.ckpt', 'Filename to save model under.')
@@ -27,8 +27,9 @@ flags.DEFINE_integer('nb_classes', 48, 'Number of classes')
 flags.DEFINE_integer('batch_size', 128, 'Size of training batches')
 flags.DEFINE_float('learning_rate', 0.0001, 'Learning rate for training')
 flags.DEFINE_bool('DO_CONF', False, 'Generate the confusion matrix on the test set')
-flags.DEFINE_bool('DO_ADV', False, 'Generate the adversarial examples on the test set')
+flags.DEFINE_bool('DO_ADV', True, 'Generate the adversarial examples on the test set')
 flags.DEFINE_bool('force_retrain', False, 'Ignore if you have already trained a model')
+flags.DEFINE_bool('save_adv_img', True, 'Save the adversarial images generated on the test set')
 
 def load_lisa_data():
     """
@@ -113,7 +114,9 @@ def data_lisa():
     X_train = X_train.astype('float32')
     X_test = X_test.astype('float32')
     X_train /= 255
+    X_train -= 1
     X_test /= 255
+    X_test -= 1
     print('X_train shape:', X_train.shape)
     print(X_train.shape[0], 'train samples')
     print(X_test.shape[0], 'test samples')
@@ -171,6 +174,7 @@ def main(argv=None):
         model_train(sess, x, y, predictions, X_train, Y_train,evaluate=evaluate, args=train_params)
     save_path = saver.save(sess,save_string)
     print("Model was saved to " +  save_string)
+
     if FLAGS.DO_CONF:
         preds = np.argmax(predictions.eval(session=sess,feed_dict={x : X_test}),axis=1)
         y_test = np.argmax(Y_test, axis=1)
@@ -186,19 +190,15 @@ def main(argv=None):
 
     if FLAGS.DO_ADV:
         # Craft adversarial examples using Fast Gradient Sign Method (FGSM)
-        adv_x = fgsm(x, predictions, eps=0.3)
         eval_params = {'batch_size': FLAGS.batch_size}
-        X_test_adv, = batch_eval(sess, [x], [adv_x], [X_test], args=eval_params)
-
-        accuracy = model_eval(sess, x, y, predictions, X_test_adv, Y_test,
-                              args=eval_params)
-        print('Test accuracy on adversarial examples: ' + str(accuracy))
+        fgsm_params = {'eps': .03}
+        fgsm = FastGradientMethod(model, sess=sess)
 
         print("Repeating the process, using adversarial training")
         # Redefine TF model graph
-        model_2 = cnn_model(img_rows=32, img_cols=32, channels=3, nb_classes=FLAGS.nb_classes)
-        predictions_2 = model_2(x)
-        adv_x_2 = fgsm(x, predictions_2, eps=0.3)
+        model_2 = model
+	predictions_2 = model_2(x)
+        adv_x_2 = fgsm.generate(x,**fgsm_params)
         predictions_2_adv = model_2(adv_x_2)
 
         def evaluate_2():
@@ -212,16 +212,42 @@ def main(argv=None):
             accuracy_adv = model_eval(sess, x, y, predictions_2_adv, X_test,
                                       Y_test, args=eval_params)
             print('Test accuracy on adversarial examples: ' + str(accuracy_adv))
-
-        # Perform adversarial training
-        model_train(sess, x, y, predictions_2, X_train, Y_train,
-                    predictions_adv=predictions_2_adv, evaluate=evaluate_2,
-                    args=train_params)
-
-       
+        
         accuracy = model_eval(sess, x, y, predictions_2_adv, X_test, Y_test,
-                              args=eval_params)
+                                      args=eval_params)
         print('Test accuracy on adversarial examples: ' + str(accuracy))
+
+        if FLAGS.save_adv_img:
+            adv_part = sess.partial_run_setup([adv_x_2,predictions_2_adv], [x])
+            adv_out = sess.partial_run(adv_part, adv_x_2, feed_dict={x:X_test})
+            preds_adv = sess.partial_run(adv_part, predictions_2_adv)
+            good_dir = os.path.join(FLAGS.train_dir, 'images/fooled_adv_img/')
+            bad_dir = os.path.join(FLAGS.train_dir, 'images/not_fooled_adv_img/')
+            orig_dir = os.path.join(FLAGS.train_dir, 'images/orig_img/')
+            if not os.path.exists(os.path.join(FLAGS.train_dir, 'images/')):
+                os.mkdir(os.path.join(FLAGS.train_dir, 'images/'))
+                os.mkdir(good_dir)
+                os.mkdir(bad_dir)
+                os.mkdir(orig_dir)
+            counter = 0
+            good = 0
+            for i in range(len(X_test)):
+                adv_img = adv_out[i] + 1
+                adv_img *= 255
+                X_test_write = X_test[i] + 1
+                X_test_write *= 255.0
+                adv_pred = preds_adv[i]
+                truth = Y_test[i]
+                if np.argmax(adv_pred) == np.argmax(truth):
+                    cv2.imwrite(os.path.join(bad_dir,'adversarial_image'+str(counter)+'.jpg'), adv_img)
+                    good += 1
+                else:
+                    cv2.imwrite(os.path.join(good_dir,'adversarial_image'+str(counter)+'.jpg'), adv_img)
+                counter += 1
+                cv2.imwrite(os.path.join(orig_dir,'original_image'+str(counter)+'.jpg'), X_test_write)
+                    
+            print(float(good)/counter)
+
 
 
 if __name__ == '__main__':
