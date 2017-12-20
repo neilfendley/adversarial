@@ -5,7 +5,7 @@ from keras.utils import np_utils
 import pdb
 from sklearn.metrics import confusion_matrix
 import pandas as pd
-import cv2
+from PIL import Image
 import json
 import os
 import tensorflow as tf
@@ -19,7 +19,7 @@ from cleverhans.utils_tf import model_train, model_eval, batch_eval
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('train_dir', 'tmp', 'Directory storing the saved model.')
-flags.DEFINE_string('data_dir','/home/fendlnm1/Fendley/street_signs/signDatabase/annotations', 'The Directory in which the extra lisadataset is')
+flags.DEFINE_string('data_dir','/home/neilf/Fendley/data/signDatabase/annotations', 'The Directory in which the extra lisadataset is')
 flags.DEFINE_string(
     'filename', 'lisacnn.ckpt', 'Filename to save model under.')
 flags.DEFINE_integer('nb_epochs', 60, 'Number of epochs to train model')
@@ -73,8 +73,9 @@ def load_lisa_data():
         random.shuffle(pic_list)
         # Read in the image, resize it  to (32, 32) and parse the class
         for pic_url in pic_list:
-            x = cv2.imread(os.path.join(FLAGS.data_dir,pic_url))
-            x_resize = cv2.resize(x.copy(), (32,32))
+            x_pil = Image.open(os.path.join(FLAGS.data_dir,pic_url))
+            x = x_pil.resize((32,32), Image.ANTIALIAS)
+            x_resize = np.array(x)
             cat = pic_url.split('_')[1]
             if cat not in cat_total.keys():
                 cat_total[cat] = 0
@@ -114,9 +115,9 @@ def data_lisa():
     X_train = X_train.astype('float32')
     X_test = X_test.astype('float32')
     X_train /= 255
-    X_train -= 1
+    X_train -= .5
     X_test /= 255
-    X_test -= 1
+    X_test -= .5
     print('X_train shape:', X_train.shape)
     print(X_train.shape[0], 'train samples')
     print(X_test.shape[0], 'test samples')
@@ -135,6 +136,9 @@ def main(argv=None):
     sess = tf.Session()
     
     X_train, Y_train, X_test, Y_test = data_lisa()
+    x_write = X_test.copy()
+    x_write += .5
+    x_write *= 255
 
     # Label Smoothing 
 
@@ -197,7 +201,7 @@ def main(argv=None):
         print("Repeating the process, using adversarial training")
         # Redefine TF model graph
         model_2 = model
-	predictions_2 = model_2(x)
+        predictions_2 = model_2(x)
         adv_x_2 = fgsm.generate(x,**fgsm_params)
         predictions_2_adv = model_2(adv_x_2)
 
@@ -221,33 +225,35 @@ def main(argv=None):
             adv_part = sess.partial_run_setup([adv_x_2,predictions_2_adv], [x])
             adv_out = sess.partial_run(adv_part, adv_x_2, feed_dict={x:X_test})
             preds_adv = sess.partial_run(adv_part, predictions_2_adv)
-            good_dir = os.path.join(FLAGS.train_dir, 'images/fooled_adv_img/')
-            bad_dir = os.path.join(FLAGS.train_dir, 'images/not_fooled_adv_img/')
+
+            #  Define the directories to save adversarial images
+            fooled_adv_dir = os.path.join(FLAGS.train_dir, 'images/fooled_adv_img/')
+            correct_predicted_dir = os.path.join(FLAGS.train_dir, 'images/not_fooled_adv_img/')
             orig_dir = os.path.join(FLAGS.train_dir, 'images/orig_img/')
             if not os.path.exists(os.path.join(FLAGS.train_dir, 'images/')):
                 os.mkdir(os.path.join(FLAGS.train_dir, 'images/'))
-                os.mkdir(good_dir)
-                os.mkdir(bad_dir)
+                os.mkdir(fooled_adv_dir)
+                os.mkdir(correct_predicted_dir)
                 os.mkdir(orig_dir)
-            counter = 0
-            good = 0
+            #  Keep track of the total images, and how many are correctly detected
+            total_images = 0
+            correct_predictions = 0
             for i in range(len(X_test)):
-                adv_img = adv_out[i] + 1
+                adv_img = adv_out[i] + .5
                 adv_img *= 255
-                X_test_write = X_test[i] + 1
-                X_test_write *= 255.0
                 adv_pred = preds_adv[i]
+                adv_pil = Image.fromarray(adv_img.astype('uint8'))
                 truth = Y_test[i]
                 if np.argmax(adv_pred) == np.argmax(truth):
-                    cv2.imwrite(os.path.join(bad_dir,'adversarial_image'+str(counter)+'.jpg'), adv_img)
-                    good += 1
+                    adv_pil.save(os.path.join(correct_predicted_dir,'adversarial_image'+str(total_images)+'.jpg'))
+                    correct_predictions += 1
                 else:
-                    cv2.imwrite(os.path.join(good_dir,'adversarial_image'+str(counter)+'.jpg'), adv_img)
-                counter += 1
-                cv2.imwrite(os.path.join(orig_dir,'original_image'+str(counter)+'.jpg'), X_test_write)
+                    adv_pil.save(os.path.join(fooled_adv_dir,'adversarial_image'+str(total_images)+'.jpg'))
+                total_images += 1
+                orig_im = Image.fromarray(x_write[i].astype('uint8'))
+                orig_im.save(os.path.join(orig_dir,'original_image'+str(total_images)+'.jpg'))
                     
-            print(float(good)/counter)
-
+            print(float(correct_predictions)/total_images)
 
 
 if __name__ == '__main__':
