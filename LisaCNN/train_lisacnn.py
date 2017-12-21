@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import random
 import keras
-from keras.utils import np_utils
+#from keras.utils import np_utils
 import pdb
 from sklearn.metrics import confusion_matrix
 import pandas as pd
@@ -18,7 +18,7 @@ from cleverhans.utils_tf import model_train, model_eval, batch_eval
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string('train_dir', 'tmp', 'Directory storing the saved model.')
+flags.DEFINE_string('train_dir', 'output', 'Directory storing the saved model and other outputs (e.g. adversarial images).')
 flags.DEFINE_string('data_dir','/home/neilf/Fendley/data/signDatabase/annotations', 'The Directory in which the extra lisadataset is')
 flags.DEFINE_string(
     'filename', 'lisacnn.ckpt', 'Filename to save model under.')
@@ -32,6 +32,24 @@ flags.DEFINE_bool('DO_CONF', False, 'Generate the confusion matrix on the test s
 flags.DEFINE_bool('DO_ADV', True, 'Generate the adversarial examples on the test set')
 flags.DEFINE_bool('force_retrain', False, 'Ignore if you have already trained a model')
 flags.DEFINE_bool('save_adv_img', True, 'Save the adversarial images generated on the test set')
+
+
+
+def to_categorical(y, num_classes, dtype=np.float32, smooth=False):
+    """ Converts a vector of integer class labels into a one-hot matrix representation.
+    """
+    out = np.zeros((y.size, num_classes), dtype=dtype)
+    for ii in range(y.size):
+        out[ii,y[ii]] = 1
+
+    if smooth:
+      # put .95 weight on true class, divide rest among other classes
+      nz_value = 0.05 / (num_classes-1)
+      out[out==0] = nz_value
+      out[out==1] = 0.95
+
+    return out
+
 
 def load_lisa_data():
     """
@@ -123,8 +141,11 @@ def data_lisa():
     print('X_train shape:', X_train.shape)
     print(X_train.shape[0], 'train samples')
     print(X_test.shape[0], 'test samples')
-    Y_train = np_utils.to_categorical(Y_train, FLAGS.nb_classes)
-    Y_test = np_utils.to_categorical(Y_test, FLAGS.nb_classes)
+    print('Y_train shape:', Y_train.shape)
+    #Y_train = np_utils.to_categorical(Y_train, FLAGS.nb_classes)
+    #Y_test = np_utils.to_categorical(Y_test, FLAGS.nb_classes)
+    Y_train = to_categorical(Y_train, FLAGS.nb_classes)
+    Y_test = to_categorical(Y_test, FLAGS.nb_classes)
     
 
     return X_train, Y_train, X_test, Y_test
