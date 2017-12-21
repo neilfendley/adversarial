@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+
+
 import random
 import keras
 #from keras.utils import np_utils
@@ -26,8 +28,7 @@ flags.DEFINE_integer('nb_epochs', 60, 'Number of epochs to train model')
 flags.DEFINE_integer('nb_classes', 48, 'Number of classes')
 flags.DEFINE_integer('batch_size', 128, 'Size of training batches')
 flags.DEFINE_float('learning_rate', 0.0001, 'Learning rate for training')
-#flags.DEFINE_float('epsilon', 0.03, 'FGSM perturbation constraint')
-flags.DEFINE_float('epsilon', 0.1, 'FGSM perturbation constraint')
+flags.DEFINE_float('epsilon', 20, 'FGSM perturbation constraint')
 flags.DEFINE_bool('DO_CONF', False, 'Generate the confusion matrix on the test set')
 flags.DEFINE_bool('DO_ADV', True, 'Generate the adversarial examples on the test set')
 flags.DEFINE_bool('force_retrain', False, 'Ignore if you have already trained a model')
@@ -49,6 +50,11 @@ def to_categorical(y, num_classes, dtype=np.float32, smooth=False):
       out[out==1] = 0.95
 
     return out
+
+
+def makedirs_if_needed(dirname):
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
 
 
 def load_lisa_data():
@@ -134,10 +140,9 @@ def data_lisa():
     X_train, Y_train, X_test, Y_test = load_lisa_data()
     X_train = X_train.astype('float32')
     X_test = X_test.astype('float32')
-    X_train /= 255
-    X_train -= .5
-    X_test /= 255
-    X_test -= .5
+
+    # Note: we now put the affine rescaling directly into the network
+
     print('X_train shape:', X_train.shape)
     print(X_train.shape[0], 'train samples')
     print(X_test.shape[0], 'test samples')
@@ -147,59 +152,54 @@ def data_lisa():
     Y_train = to_categorical(Y_train, FLAGS.nb_classes)
     Y_test = to_categorical(Y_test, FLAGS.nb_classes)
     
-
     return X_train, Y_train, X_test, Y_test
 
-def main(argv=None):
 
-    # Set TF random seed to improve reproducibility
-    tf.set_random_seed(1246)
 
-    # Create TF session and set as Keras backend session
-    sess = tf.Session()
-    
-    X_train, Y_train, X_test, Y_test = data_lisa()
-    x_write = X_test.copy()
-    x_write += .5
-    x_write *= 255
-
-    # Label Smoothing 
-
-    #label_smooth = .1
-    #Y_train = Y_train.clip(label_smooth / 9., 1. - label_smooth)
-
-    # Define input TF placeholder
+def make_lisa_cnn(sess):
+    """ Note that the network produced by cnn_model() is fairly weak.
+        For example, on CIFAR-10 it gets 60-something percent accuracy,
+        which substantially below state-of-the-art.
+    """
+    num_classes=48
     x = tf.placeholder(tf.float32, shape=(None, 32, 32, 3))
-    y = tf.placeholder(tf.float32, shape=(None, FLAGS.nb_classes))
+    y = tf.placeholder(tf.float32, shape=(None, num_classes))
 
-    # Define TF model graph
-    model = cnn_model(img_rows=32, img_cols=32, channels=3, nb_classes=FLAGS.nb_classes)
-    predictions = model(x)
-    print("Defined TensorFlow model graph.")
+    # This affine transformation may not be strictly necessary
+    x = (x / 255.) - 0.5
 
-    saver = tf.train.Saver()
+    # TODO: fix naming convention explicitly? 
+    # otherwise, names depend upon when model was created...
+    model = cnn_model(img_rows=32, img_cols=32, channels=3, nb_classes=num_classes)
+
+    return model, x, y
+
+
+
+def train_lisa_cnn(sess, save_string):
+    """ Trains the LISA-CNN network.
+    """
+    X_train, Y_train, X_test, Y_test = data_lisa()   # load data
+    model, x, y = make_lisa_cnn(sess)
+
     def evaluate():
         # Evaluate the accuracy of the lisaCNN model on legitimate test
         # examples
         eval_params = {'batch_size': FLAGS.batch_size}
-        accuracy = model_eval(sess, x, y, predictions, X_test, Y_test,
-                              args=eval_params)
+        accuracy = model_eval(sess, x, y, model(x), X_test, Y_test, args=eval_params)
         print('Test accuracy on legitimate test examples: ' + str(accuracy))
 
-    # Training 
     train_params = {
         'nb_epochs': FLAGS.nb_epochs,
         'batch_size': FLAGS.batch_size,
         'learning_rate': FLAGS.learning_rate
     }
-    # If we have already trained a model, load it 
 
-    save_string = os.path.join(FLAGS.train_dir,FLAGS.filename)
-    if tf.train.checkpoint_exists(save_string) and not FLAGS.force_retrain:
-        saver.restore(sess, save_string)
-    else:
-        model_train(sess, x, y, predictions, X_train, Y_train,evaluate=evaluate, args=train_params)
-    save_path = saver.save(sess,save_string)
+    # Note: i believe this will add some new (Adam-related) variables to the graph
+    model_train(sess, x, y, model(x), X_train, Y_train, evaluate=evaluate, args=train_params)
+
+    saver = tf.train.Saver()
+    save_path = saver.save(sess, save_string)
     print("Model was saved to " +  save_string)
 
     if FLAGS.DO_CONF:
@@ -215,74 +215,84 @@ def main(argv=None):
         acc = 1 - (float(wrong) / total)
         df = pd.DataFrame(conf)
 
-    if FLAGS.DO_ADV:
-        # Craft adversarial examples using Fast Gradient Sign Method (FGSM)
-        eval_params = {'batch_size': FLAGS.batch_size}
-        fgsm_params = {'eps': FLAGS.epsilon}
-        fgsm = FastGradientMethod(model, sess=sess)
 
-        print("Repeating the process, using adversarial training")
-        # Redefine TF model graph
-        model_2 = model
-        predictions_2 = model_2(x)
-        adv_x_2 = fgsm.generate(x,**fgsm_params)
-        predictions_2_adv = model_2(adv_x_2)
 
-        def evaluate_2():
-            # legitimate test examples
-            eval_params = {'batch_size': FLAGS.batch_size}
-            accuracy = model_eval(sess, x, y, predictions_2, X_test, Y_test,
-                                  args=eval_params)
-            print('Test accuracy on legitimate test examples: ' + str(accuracy))
+def attack_lisa_cnn(sess, save_string):
+      # Adversarial attack
+      X_train, Y_train, X_test, Y_test = data_lisa()
 
-            # adversarial examples
-            accuracy_adv = model_eval(sess, x, y, predictions_2_adv, X_test,
-                                      Y_test, args=eval_params)
-            print('Test accuracy on adversarial examples: ' + str(accuracy_adv))
-        
-        accuracy = model_eval(sess, x, y, predictions_2_adv, X_test, Y_test,
-                                      args=eval_params)
-        print('Test accuracy on adversarial examples: ' + str(accuracy))
+      # restore model
+      # TODO: do we need to specify test mode?
+      model, x, y = make_lisa_cnn(sess)
+      saver = tf.train.Saver()
+      saver.restore(sess, save_string)
 
-        if FLAGS.save_adv_img:
-            adv_part = sess.partial_run_setup([adv_x_2,predictions_2_adv], [x])
-            adv_out = sess.partial_run(adv_part, adv_x_2, feed_dict={x:X_test})
-            preds_adv = sess.partial_run(adv_part, predictions_2_adv)
+      # create attack
+      fgsm = FastGradientMethod(model, sess=sess)
+      x_adv = fgsm.generate(x, eps=FLAGS.epsilon)
 
-            #  Define the directories to save adversarial images
-            #
-            # MJP: updating directory layout slightly.
-            #
-            fooled_adv_dir = os.path.join(FLAGS.train_dir, 'images/fooled_FGSM%0.2f/' % FLAGS.epsilon)
-            correct_predicted_dir = os.path.join(FLAGS.train_dir, 'images/not_fooled_FGSM%0.2f/' % FLAGS.epsilon)
-            for dirname in [fooled_adv_dir, correct_predicted_dir]:
-                os.makedirs(os.path.join(dirname, 'adv'))
-                os.makedirs(os.path.join(dirname, 'orig'))
+      # create a model to attack.
+      # In this case, it is the same model used to generate AE (LISA-CNN)
+      model_tgt = model
+      pred_tgt = model_tgt(x_adv)
 
-            #  Keep track of the total images, and how many are correctly detected
-            total_images = 0
-            correct_predictions = 0
-            for i in range(len(X_test)):
-                adv_img = adv_out[i] + .5
-                adv_img *= 255
-                adv_pred = preds_adv[i]
-                adv_pil = Image.fromarray(adv_img.astype('uint8'))
-                truth = Y_test[i]
-                if np.argmax(adv_pred) == np.argmax(truth):
-                    out_dir = correct_predicted_dir
-                    #adv_pil.save(os.path.join(correct_predicted_dir,'adversarial_image'+str(total_images)+'.jpg'))
-                    correct_predictions += 1
-                else:
-                    out_dir = fooled_adv_dir
-                    #adv_pil.save(os.path.join(fooled_adv_dir,'adversarial_image'+str(total_images)+'.jpg'))
-                total_images += 1
+      accuracy = model_eval(sess, x, y, pred_tgt, X_test, Y_test, args={'batch_size' : FLAGS.batch_size})
+      print('Test accuracy on adversarial examples: ' + str(accuracy))
 
-                orig_im = Image.fromarray(x_write[i].astype('uint8'))
-                #orig_im.save(os.path.join(orig_dir,'original_image'+str(total_images)+'.jpg'))
-                orig_im.save(os.path.join(out_dir, 'orig', 'image'+str(total_images)+'.jpg'))
-                adv_pil.save(os.path.join(out_dir, 'adv', 'image'+str(total_images)+'.jpg'))
-                    
-            print(float(correct_predictions)/total_images)
+      if FLAGS.save_adv_img:
+          adv_part = sess.partial_run_setup([x_adv, pred_tgt], [x])
+          adv_out = sess.partial_run(adv_part, x_adv, feed_dict={x:X_test})
+          preds_adv = sess.partial_run(adv_part, pred_tgt)
+
+          #  Define the directories to save adversarial images
+          #
+          # MJP: updating directory layout slightly.
+          #
+          fooled_adv_dir = os.path.join(FLAGS.train_dir, 'images/fooled_FGSM%0.2f/' % FLAGS.epsilon)
+          correct_predicted_dir = os.path.join(FLAGS.train_dir, 'images/not_fooled_FGSM%0.2f/' % FLAGS.epsilon)
+          for dirname in [fooled_adv_dir, correct_predicted_dir]:
+              makedirs_if_needed(os.path.join(dirname, 'adv'))
+              makedirs_if_needed(os.path.join(dirname, 'orig'))
+
+          #  Keep track of the total images, and how many are correctly detected
+          total_images = 0
+          correct_predictions = 0
+          for i in range(len(X_test)):
+              adv_img = adv_out[i] + .5
+              adv_img *= 255
+              adv_pred = preds_adv[i]
+              adv_pil = Image.fromarray(adv_img.astype('uint8'))
+              truth = Y_test[i]
+              if np.argmax(adv_pred) == np.argmax(truth):
+                  out_dir = correct_predicted_dir
+                  #adv_pil.save(os.path.join(correct_predicted_dir,'adversarial_image'+str(total_images)+'.jpg'))
+                  correct_predictions += 1
+              else:
+                  out_dir = fooled_adv_dir
+                  #adv_pil.save(os.path.join(fooled_adv_dir,'adversarial_image'+str(total_images)+'.jpg'))
+              total_images += 1
+
+              orig_im = Image.fromarray(X_test[i].astype('uint8'))
+              #orig_im.save(os.path.join(orig_dir,'original_image'+str(total_images)+'.jpg'))
+              orig_im.save(os.path.join(out_dir, 'orig', 'image'+str(total_images)+'.jpg'))
+              adv_pil.save(os.path.join(out_dir, 'adv', 'image'+str(total_images)+'.jpg'))
+                
+          print(float(correct_predictions)/total_images)
+
+
+def main(argv=None):
+    # Set TF random seed to improve reproducibility
+    tf.set_random_seed(1246)
+
+    save_string = os.path.join(FLAGS.train_dir, FLAGS.filename)
+
+    with tf.Session() as sess:
+      if not os.path.exists(FLAGS.train_dir) or not tf.train.checkpoint_exists(save_string) or FLAGS.force_retrain:
+          print("Training LISA-CNN")
+          train_lisa_cnn(sess, save_string)
+      else:
+          print("Attacking LISA-CNN")
+          attack_lisa_cnn(sess, save_string)
 
 
 if __name__ == '__main__':
