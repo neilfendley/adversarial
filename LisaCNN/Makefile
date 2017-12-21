@@ -22,8 +22,7 @@ $(CLEVERHANS_DIR) :
 # Note that the network need only be trained once.
 # Subsequent runs evaluate on the test set.
 lisa-cnn : $(CLEVERHANS_DIR)
-	PYTHONPATH=$(CLEVERHANS_DIR) python ./train_lisacnn.py --data_dir=$(LISA_DIR) --epsilon=0.1
-	PYTHONPATH=$(CLEVERHANS_DIR) python ./train_lisacnn.py --data_dir=$(LISA_DIR) --epsilon=0.2
+	PYTHONPATH=$(CLEVERHANS_DIR) python ./train_lisacnn.py --data_dir=$(LISA_DIR) --epsilon=30
 
 
 # remove AE so they can be re-computed
