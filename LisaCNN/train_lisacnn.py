@@ -26,6 +26,8 @@ flags.DEFINE_integer('nb_epochs', 60, 'Number of epochs to train model')
 flags.DEFINE_integer('nb_classes', 48, 'Number of classes')
 flags.DEFINE_integer('batch_size', 128, 'Size of training batches')
 flags.DEFINE_float('learning_rate', 0.0001, 'Learning rate for training')
+#flags.DEFINE_float('epsilon', 0.03, 'FGSM perturbation constraint')
+flags.DEFINE_float('epsilon', 0.1, 'FGSM perturbation constraint')
 flags.DEFINE_bool('DO_CONF', False, 'Generate the confusion matrix on the test set')
 flags.DEFINE_bool('DO_ADV', True, 'Generate the adversarial examples on the test set')
 flags.DEFINE_bool('force_retrain', False, 'Ignore if you have already trained a model')
@@ -195,7 +197,7 @@ def main(argv=None):
     if FLAGS.DO_ADV:
         # Craft adversarial examples using Fast Gradient Sign Method (FGSM)
         eval_params = {'batch_size': FLAGS.batch_size}
-        fgsm_params = {'eps': .03}
+        fgsm_params = {'eps': FLAGS.epsilon}
         fgsm = FastGradientMethod(model, sess=sess)
 
         print("Repeating the process, using adversarial training")
@@ -227,14 +229,15 @@ def main(argv=None):
             preds_adv = sess.partial_run(adv_part, predictions_2_adv)
 
             #  Define the directories to save adversarial images
-            fooled_adv_dir = os.path.join(FLAGS.train_dir, 'images/fooled_adv_img/')
-            correct_predicted_dir = os.path.join(FLAGS.train_dir, 'images/not_fooled_adv_img/')
-            orig_dir = os.path.join(FLAGS.train_dir, 'images/orig_img/')
-            if not os.path.exists(os.path.join(FLAGS.train_dir, 'images/')):
-                os.mkdir(os.path.join(FLAGS.train_dir, 'images/'))
-                os.mkdir(fooled_adv_dir)
-                os.mkdir(correct_predicted_dir)
-                os.mkdir(orig_dir)
+            #
+            # MJP: updating directory layout slightly.
+            #
+            fooled_adv_dir = os.path.join(FLAGS.train_dir, 'images/fooled_FGSM%0.2f/' % FLAGS.epsilon)
+            correct_predicted_dir = os.path.join(FLAGS.train_dir, 'images/not_fooled_FGSM%0.2f/' % FLAGS.epsilon)
+            for dirname in [fooled_adv_dir, correct_predicted_dir]:
+                os.makedirs(os.path.join(dirname, 'adv'))
+                os.makedirs(os.path.join(dirname, 'orig'))
+
             #  Keep track of the total images, and how many are correctly detected
             total_images = 0
             correct_predictions = 0
@@ -245,13 +248,18 @@ def main(argv=None):
                 adv_pil = Image.fromarray(adv_img.astype('uint8'))
                 truth = Y_test[i]
                 if np.argmax(adv_pred) == np.argmax(truth):
-                    adv_pil.save(os.path.join(correct_predicted_dir,'adversarial_image'+str(total_images)+'.jpg'))
+                    out_dir = correct_predicted_dir
+                    #adv_pil.save(os.path.join(correct_predicted_dir,'adversarial_image'+str(total_images)+'.jpg'))
                     correct_predictions += 1
                 else:
-                    adv_pil.save(os.path.join(fooled_adv_dir,'adversarial_image'+str(total_images)+'.jpg'))
+                    out_dir = fooled_adv_dir
+                    #adv_pil.save(os.path.join(fooled_adv_dir,'adversarial_image'+str(total_images)+'.jpg'))
                 total_images += 1
+
                 orig_im = Image.fromarray(x_write[i].astype('uint8'))
-                orig_im.save(os.path.join(orig_dir,'original_image'+str(total_images)+'.jpg'))
+                #orig_im.save(os.path.join(orig_dir,'original_image'+str(total_images)+'.jpg'))
+                orig_im.save(os.path.join(out_dir, 'orig', 'image'+str(total_images)+'.jpg'))
+                adv_pil.save(os.path.join(out_dir, 'adv', 'image'+str(total_images)+'.jpg'))
                     
             print(float(correct_predictions)/total_images)
 
