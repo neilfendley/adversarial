@@ -218,66 +218,68 @@ def train_lisa_cnn(sess, save_string):
 
 
 def attack_lisa_cnn(sess, save_string):
-      # Adversarial attack
-      X_train, Y_train, X_test, Y_test = data_lisa()
+    """ Generates AE for the LISA-CNN.
+        Assumes you have already run train_lisa_cnn() to train the network.
+    """
+    # Adversarial attack
+    X_train, Y_train, X_test, Y_test = data_lisa()
 
-      # restore model
-      # TODO: do we need to specify test mode?
-      model, x, y = make_lisa_cnn(sess)
-      saver = tf.train.Saver()
-      saver.restore(sess, save_string)
+    # restore model
+    # TODO: do we need to specify test mode?
+    model, x, y = make_lisa_cnn(sess)
+    saver = tf.train.Saver()
+    saver.restore(sess, save_string)
 
-      # create attack
-      fgsm = FastGradientMethod(model, sess=sess)
-      x_adv = fgsm.generate(x, eps=FLAGS.epsilon)
+    # create attack
+    fgsm = FastGradientMethod(model, sess=sess)
+    x_adv = fgsm.generate(x, eps=FLAGS.epsilon)
 
-      # create a model to attack.
-      # In this case, it is the same model used to generate AE (LISA-CNN)
-      model_tgt = model
-      pred_tgt = model_tgt(x_adv)
+    # create a model to attack.
+    # In this case, it is the same model used to generate AE (LISA-CNN)
+    model_tgt = model
+    pred_tgt = model_tgt(x_adv)
 
-      accuracy = model_eval(sess, x, y, pred_tgt, X_test, Y_test, args={'batch_size' : FLAGS.batch_size})
-      print('Test accuracy on adversarial examples: ' + str(accuracy))
+    accuracy = model_eval(sess, x, y, pred_tgt, X_test, Y_test, args={'batch_size' : FLAGS.batch_size})
+    print('Test accuracy on adversarial examples: ' + str(accuracy))
 
-      if FLAGS.save_adv_img:
-          adv_part = sess.partial_run_setup([x_adv, pred_tgt], [x])
-          adv_out = sess.partial_run(adv_part, x_adv, feed_dict={x:X_test})
-          preds_adv = sess.partial_run(adv_part, pred_tgt)
+    if FLAGS.save_adv_img:
+        adv_part = sess.partial_run_setup([x_adv, pred_tgt], [x])
+        adv_out = sess.partial_run(adv_part, x_adv, feed_dict={x:X_test})
+        preds_adv = sess.partial_run(adv_part, pred_tgt)
 
-          #  Define the directories to save adversarial images
-          #
-          # MJP: updating directory layout slightly.
-          #
-          fooled_adv_dir = os.path.join(FLAGS.train_dir, 'images/fooled_FGSM%0.2f/' % FLAGS.epsilon)
-          correct_predicted_dir = os.path.join(FLAGS.train_dir, 'images/not_fooled_FGSM%0.2f/' % FLAGS.epsilon)
-          for dirname in [fooled_adv_dir, correct_predicted_dir]:
-              makedirs_if_needed(os.path.join(dirname, 'adv'))
-              makedirs_if_needed(os.path.join(dirname, 'orig'))
+        #  Define the directories to save adversarial images
+        #
+        # MJP: updating directory layout slightly.
+        #
+        fooled_adv_dir = os.path.join(FLAGS.train_dir, 'images/fooled_FGSM%0.2f/' % FLAGS.epsilon)
+        correct_predicted_dir = os.path.join(FLAGS.train_dir, 'images/not_fooled_FGSM%0.2f/' % FLAGS.epsilon)
+        for dirname in [fooled_adv_dir, correct_predicted_dir]:
+            makedirs_if_needed(os.path.join(dirname, 'adv'))
+            makedirs_if_needed(os.path.join(dirname, 'orig'))
 
-          #  Keep track of the total images, and how many are correctly detected
-          total_images = 0
-          correct_predictions = 0
-          for i in range(len(X_test)):
-              adv_img = adv_out[i] + .5
-              adv_img *= 255
-              adv_pred = preds_adv[i]
-              adv_pil = Image.fromarray(adv_img.astype('uint8'))
-              truth = Y_test[i]
-              if np.argmax(adv_pred) == np.argmax(truth):
-                  out_dir = correct_predicted_dir
-                  #adv_pil.save(os.path.join(correct_predicted_dir,'adversarial_image'+str(total_images)+'.jpg'))
-                  correct_predictions += 1
-              else:
-                  out_dir = fooled_adv_dir
-                  #adv_pil.save(os.path.join(fooled_adv_dir,'adversarial_image'+str(total_images)+'.jpg'))
-              total_images += 1
+        #  Keep track of the total images, and how many are correctly detected
+        total_images = 0
+        correct_predictions = 0
+        for i in range(len(X_test)):
+            adv_img = adv_out[i] + .5
+            adv_img *= 255
+            adv_pred = preds_adv[i]
+            adv_pil = Image.fromarray(adv_img.astype('uint8'))
+            truth = Y_test[i]
+            if np.argmax(adv_pred) == np.argmax(truth):
+                out_dir = correct_predicted_dir
+                #adv_pil.save(os.path.join(correct_predicted_dir,'adversarial_image'+str(total_images)+'.jpg'))
+                correct_predictions += 1
+            else:
+                out_dir = fooled_adv_dir
+                #adv_pil.save(os.path.join(fooled_adv_dir,'adversarial_image'+str(total_images)+'.jpg'))
+            total_images += 1
 
-              orig_im = Image.fromarray(X_test[i].astype('uint8'))
-              #orig_im.save(os.path.join(orig_dir,'original_image'+str(total_images)+'.jpg'))
-              orig_im.save(os.path.join(out_dir, 'orig', 'image'+str(total_images)+'.jpg'))
-              adv_pil.save(os.path.join(out_dir, 'adv', 'image'+str(total_images)+'.jpg'))
+            orig_im = Image.fromarray(X_test[i].astype('uint8'))
+            orig_im.save(os.path.join(out_dir, 'orig', 'image'+str(total_images)+'.jpg'))
+            adv_pil.save(os.path.join(out_dir, 'adv', 'image'+str(total_images)+'.jpg'))
                 
-          print(float(correct_predictions)/total_images)
+        print(float(correct_predictions)/total_images)
 
 
 def main(argv=None):
