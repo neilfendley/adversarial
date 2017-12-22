@@ -185,6 +185,8 @@ if __name__ == "__main__":
   # this should approximate table I in Evtimov et al. fairly closely
   train_idx, test_idx = si.train_test_split(.17, max_per_class=500)
 
+  assert(np.intersect1d(train_idx, test_idx).size == 0)
+
   print(si.describe(train_idx))
   print(si.describe(test_idx))
 
