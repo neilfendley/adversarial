@@ -52,6 +52,27 @@ def to_categorical(y, num_classes, dtype=np.float32, smooth=False):
     return out
 
 
+
+def downsample_data_set(x, y, max_per_class):
+    """ Downsamples a data set so that the maximum number of 
+        representatives from any one class is max_per_class.
+
+        x : a tensor of feature data with shape (n, ...) where n is the number of examples.
+        y : a vector of integer class labels with shape (n,)
+    """
+    y_all = np.unique(y)
+    to_keep = np.zeros((y.size,), dtype=np.bool)
+
+    for yi in y_all:
+        indices = np.nonzero(y == yi)[0]
+        if len(indices) > max_per_class:
+            indices = np.random.choice(indices, max_per_class, replace=False)
+        to_keep[indices] = True
+
+    return x[to_keep,...], y[to_keep]
+
+
+
 def makedirs_if_needed(dirname):
     if not os.path.exists(dirname):
         os.makedirs(dirname)
@@ -124,7 +145,8 @@ def load_lisa_data():
         np.save(os.path.join(FLAGS.train_dir, 'ytest.npy'), Y_test)
     return np.asarray(X_train), np.asarray(Y_train), np.asarray(X_test), np.asarray(Y_test)
 
-def data_lisa():
+
+def data_lisa(per_class_limit=500):
     """
     Funtion to read in the data prepared by the lisa dataset
     The train test split will be randomly generated, or loaded if you have a /tmp 
@@ -141,14 +163,21 @@ def data_lisa():
     X_train = X_train.astype('float32')
     X_test = X_test.astype('float32')
 
-    # Note: we now put the affine rescaling directly into the network
+    # Note: we moved the affine rescaling directly into the network
+
+    # Downsample to promote class balance during training
+    X_train, Y_train = downsample_data_set(X_train, Y_train, 500)
 
     print('X_train shape:', X_train.shape)
     print(X_train.shape[0], 'train samples')
     print(X_test.shape[0], 'test samples')
     print('Y_train shape:', Y_train.shape)
-    #Y_train = np_utils.to_categorical(Y_train, FLAGS.nb_classes)
-    #Y_test = np_utils.to_categorical(Y_test, FLAGS.nb_classes)
+
+    all_labels = np.unique(Y_train)
+    print('There are %d unique classes:' % all_labels.size)
+    for yi in all_labels:
+        print('  y=%d : %d' % (yi, np.sum(Y_train==yi)))
+
     Y_train = to_categorical(Y_train, FLAGS.nb_classes)
     Y_test = to_categorical(Y_test, FLAGS.nb_classes)
     
@@ -225,7 +254,6 @@ def attack_lisa_cnn(sess, save_string):
     X_train, Y_train, X_test, Y_test = data_lisa()
 
     # restore model
-    # TODO: do we need to specify test mode?
     model, x, y = make_lisa_cnn(sess)
     saver = tf.train.Saver()
     saver.restore(sess, save_string)
