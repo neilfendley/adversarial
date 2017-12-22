@@ -126,13 +126,14 @@ class Subimage(object):
 # These correspond to table 1 from Evtimov et al. "Robust Physical-World Attacks on Deep Learning Models".
 # It does *not* capture all possible classes in LISA.
 #
-LISA_CLASSES = ["addedLane", "keepRight", "laneEnds", "merge", "pedestrianCrossing", "school",
-                "schoolSpeedLimit25", "signalAhead", "speedLimit25", "speedLimit30", "speedLimit35",
-                "speedLimit45", "speedLimitUrdbl", "stop", "stopAhead", "turnRight", "yield"]
-LISA_CLASS_MAP = { x : ii for ii,x in enumerate(LISA_CLASSES)}
+LISA_17_CLASSES = ["addedLane", "keepRight", "laneEnds", "merge", "pedestrianCrossing", "school",
+                   "schoolSpeedLimit25", "signalAhead", "speedLimit25", "speedLimit30", "speedLimit35",
+                   "speedLimit45", "speedLimitUrdbl", "stop", "stopAhead", "turnRight", "yield"]
+
+LISA_17_CLASS_MAP = { x : ii for ii,x in enumerate(LISA_17_CLASSES) }
 
 
-def parse_LISA(csvfile, class_map=LISA_CLASS_MAP):
+def parse_LISA(csvfile, class_map=LISA_17_CLASS_MAP):
   "See also: tools/extractAnnotations.py in LISA dataset."
   si = Subimage()
 
@@ -140,22 +141,31 @@ def parse_LISA(csvfile, class_map=LISA_CLASS_MAP):
 
   csv = open(csvfile, 'r')
   csv.readline() # discard header
+  csv = csv.readlines()
 
   # Note: the original LISA parsing code shuffled the rows, but this just adds 
   #       potential confusion so I'm not doing that for now.
+
+  # If no classmap was provided, create one.
+  if class_map is None:
+    class_map = {}
+    for line in csv:
+      fields = line.split(';')
+      if fields[1] not in class_map:
+        class_map[fields[1]] = len(class_map)
   
   # base path to actual filenames.
   base_path = os.path.dirname(csvfile)
 
   # do it
-  for idx, line in enumerate(csv.readlines()):
+  for idx, line in enumerate(csv):
     fields = line.split(';')
     y_str = fields[1]
-    if y_str not in LISA_CLASS_MAP:
+    if y_str not in class_map:
       continue
 
     im_filename = fields[0]
-    y = LISA_CLASS_MAP[y_str]
+    y = class_map[y_str]
     x0 = int(fields[2])
     x1 = int(fields[4])
     y0 = int(fields[3])
