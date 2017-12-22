@@ -18,6 +18,8 @@ from cleverhans.attacks import FastGradientMethod
 from cleverhans.utils_keras import cnn_model
 from cleverhans.utils_tf import model_train, model_eval, batch_eval
 
+import subimage
+
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('train_dir', 'output', 'Directory storing the saved model and other outputs (e.g. adversarial images).')
@@ -90,6 +92,21 @@ def load_lisa_data():
         xtest: numpy array of test data
         ytest: numpy array of test labels
     """
+    si = subimage.parse_LISA('~/Data/LISA/allAnnotations.csv')
+    train_idx, test_idx = si.train_test_split(.17, max_per_class=500)
+    print(si.describe(train_idx))
+    print(si.describe(test_idx))
+
+    x_train, y_train = si.get_subimages(train_idx, (32,32))
+    x_train = np.array(x_train) # condense into a tensor
+
+    x_test, y_test = si.get_subimages(test_idx, (32,32))
+    x_test = np.array(x_test) # condense into a tensor
+
+    return x_train, y_train, x_test, y_test
+
+
+def old_load_lisa_data():
        # Check if you have created the numpy arrays already
     if os.path.exists(os.path.join(FLAGS.train_dir,'ytest.npy')):
         X_train = np.load(os.path.join(FLAGS.train_dir, 'xtrain.npy'))
@@ -158,20 +175,22 @@ def data_lisa(per_class_limit=500):
         ytest: numpy array of the test labels
     
     """
-
+    # *** TODO  *** figure out why these two are so different!
+    #               related to .png format, or maybe I (mjp) broke something?
+    #X_train, Y_train, X_test, Y_test = old_load_lisa_data()
     X_train, Y_train, X_test, Y_test = load_lisa_data()
+
     X_train = X_train.astype('float32')
     X_test = X_test.astype('float32')
 
     # Note: we moved the affine rescaling directly into the network
 
     # Downsample to promote class balance during training
-    X_train, Y_train = downsample_data_set(X_train, Y_train, 500)
+    X_train, Y_train = downsample_data_set(X_train, Y_train, per_class_limit)
 
     print('X_train shape:', X_train.shape)
-    print(X_train.shape[0], 'train samples')
-    print(X_test.shape[0], 'test samples')
     print('Y_train shape:', Y_train.shape)
+    print('X_test shape: ', X_test.shape)
 
     all_labels = np.unique(Y_train)
     print('There are %d unique classes:' % all_labels.size)
