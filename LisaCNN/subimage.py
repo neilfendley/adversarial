@@ -6,9 +6,12 @@ __author__ = "mjp"
 
 
 import os
+import pdb
+
 import numpy as np
 from PIL import Image
-import pdb
+
+from sklearn.model_selection import train_test_split
 
 
 class Subimage(object):
@@ -30,19 +33,50 @@ class Subimage(object):
     self._y.append(y)
 
 
-  def sample(self, max_per_class=np.Inf):
-    indices = []
-    return indices
+  def describe(self, indices):
+    y = np.array(self._y)
+    y = y[indices]
+    out = '%d objects with %d unique class labels\n' % (len(indices), np.unique(y).size)
+    for yi in np.unique(y):
+      out += '  y=%d : %d\n' % (yi, np.sum(y == yi))
+    return out
 
 
-  def get_subimages(self, indices, new_size):
+  def train_test_split(self, pct_test, max_per_class=np.Inf):
+    indices = np.arange(len(self._filenames))
+    assert(pct_test < 1.0)
+
+    train, test = train_test_split(indices, test_size=pct_test, stratify=self._y)
+
+    # (optional): limit max # of examples in a given class
+    if np.isfinite(max_per_class):
+      y = np.array(self._y)
+
+      for yi in np.unique(y):
+        yi_idx = np.nonzero(y[train] == yi)[0]
+        if len(yi_idx) > max_per_class:
+          train = np.delete(train, yi_idx[max_per_class:])
+          
+    return train, test
+
+
+  def get_subimages(self, indices, new_size=None):
     out = []
     for idx in indices:
       im = Image.open(self._filenames[idx])
       im = im.crop(self._bbox[idx])
-      im = im.resize(new_size, Image.ANTIALIAS)
+      if new_size is not None:
+        im = im.resize(new_size, Image.ANTIALIAS)
       out.append(np.array(im))
-    return np.array(out)
+    return out
+
+
+  def get_images(self, indices):
+    out = []
+    for idx in indices:
+      im = Image.open(self._filenames[idx])
+      out.append(np.array(im))
+    return out
 
 
   def splice(self, indices, new_subimage):
@@ -98,6 +132,14 @@ def parse_LISA(csvfile, class_map=LISA_CLASS_MAP):
 if __name__ == "__main__":
   # example usage
   si = parse_LISA('~/Data/LISA/allAnnotations.csv')
-  x = si.get_subimages([1,3,23,50], (32,32))
 
+  # this should approximate table I in Evtimov et al. fairly closely
+  train_idx, test_idx = si.train_test_split(.17, max_per_class=500)
 
+  print(si.describe(train_idx))
+  print(si.describe(test_idx))
+
+  print('extracting sub-images...')
+  x_test = si.get_subimages(test_idx, (32,32))
+  x_test = np.array(x_test) # condense into a tensor
+  print('done!')
