@@ -3,6 +3,7 @@ Code to facilitate working with sub-images/regions within larger images.
 """
 
 __author__ = "mjp"
+__date__ = "dec 2017"
 
 
 import os
@@ -68,7 +69,9 @@ class Subimage(object):
       if new_size is not None:
         im = im.resize(new_size, Image.ANTIALIAS)
       out.append(np.array(im))
-    return out
+
+    y = np.array(self._y)
+    return out, y[indices]
 
 
   def get_images(self, indices):
@@ -76,7 +79,9 @@ class Subimage(object):
     for idx in indices:
       im = Image.open(self._filenames[idx])
       out.append(np.array(im))
-    return out
+
+    y = np.array(self._y)
+    return out, y[indices]
 
 
   def splice(self, indices, new_subimage):
@@ -140,6 +145,6 @@ if __name__ == "__main__":
   print(si.describe(test_idx))
 
   print('extracting sub-images...')
-  x_test = si.get_subimages(test_idx, (32,32))
+  x_test, y_test = si.get_subimages(test_idx, (32,32))
   x_test = np.array(x_test) # condense into a tensor
   print('done!')
