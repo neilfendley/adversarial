@@ -61,7 +61,19 @@ class Subimage(object):
     return train, test
 
 
+  def get_images(self, indices):
+    "Returns full sized images at the specified indices."
+    out = []
+    for idx in indices:
+      im = Image.open(self._filenames[idx])
+      out.append(np.array(im))
+
+    y = np.array(self._y)
+    return out, y[indices]
+
+
   def get_subimages(self, indices, new_size=None):
+    "Extracts sub-indices from images."
     out = []
     for idx in indices:
       im = Image.open(self._filenames[idx])
@@ -74,19 +86,38 @@ class Subimage(object):
     return out, y[indices]
 
 
-  def get_images(self, indices):
+  def splice_subimages(self, indices, new_subimage):
+    """
+       Splice new subimages into original images.
+
+         new_subimage : either (a) a list of images to inject or 
+                               (b) a tensor of images (n x rows x cols x channels)
+    """
     out = []
-    for idx in indices:
-      im = Image.open(self._filenames[idx])
-      out.append(np.array(im))
 
-    y = np.array(self._y)
-    return out, y[indices]
+    for ii, idx in enumerate(indices):
+      xi = np.array(Image.open(self._filenames[idx]))
 
+      # the bounding box
+      x0,y0,x1,y1 = self._bbox[idx]
+      width = x1-x0
+      height = y1-y0
 
-  def splice(self, indices, new_subimage):
-    pass
+      # resize new image (if needed) and blast into bounding box
+      if isinstance(new_subimage, list) or isinstance(new_subimage, tuple):
+        si = new_subimage[ii]
+      else:
+        si = new_subimage[ii,...]
+      assert(si.ndim >= 2)
 
+      if si.shape[0] != height or si.shape[1] != width:
+        si = Image(xi).resize((width,height), Image.ANTIALIAS)
+        si = np.array(xi)
+
+      xi[y0:y1,x0:x1] = si
+      out.append(xi)
+
+    return out
 
 #-------------------------------------------------------------------------------
 
@@ -148,3 +179,13 @@ if __name__ == "__main__":
   x_test, y_test = si.get_subimages(test_idx, (32,32))
   x_test = np.array(x_test) # condense into a tensor
   print('done!')
+
+  # sanity check the splicing operation
+  print('testing splice code...')
+  indices = test_idx[:100]
+  x_big, _ = si.get_images(indices)
+  x_small, _ = si.get_subimages(indices, None)
+  x_splice = si.splice_subimages(indices, x_small)
+
+  for ii in range(len(x_splice)):
+    assert(np.all(x_splice[ii] == x_big[ii]))
