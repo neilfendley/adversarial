@@ -140,6 +140,9 @@ def parse_LISA(csvfile, class_map=LISA_CLASS_MAP):
 
   csv = open(csvfile, 'r')
   csv.readline() # discard header
+
+  # Note: the original LISA parsing code shuffled the rows, but this just adds 
+  #       potential confusion so I'm not doing that for now.
   
   # base path to actual filenames.
   base_path = os.path.dirname(csvfile)
