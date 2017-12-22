@@ -15,20 +15,26 @@ LISA_DIR=/home/pekalmj1/Data/LISA/annotations
 default : lisa-cnn
 
 
+# Check out the cleverhans project, if it was not already
 $(CLEVERHANS_DIR) :
 	git clone https://github.com/tensorflow/cleverhans.git
 
 
-# Note that the network need only be trained once.
-# Subsequent runs evaluate on the test set.
+# This target either:
+#   1.  Trains the LISA-CNN, if the weights do not exist locally or
+#   2.  Runs some adversarial attacks on a previously trained network.
+# 
 lisa-cnn : $(CLEVERHANS_DIR)
 	PYTHONPATH=$(CLEVERHANS_DIR) python ./train_lisacnn.py --data_dir=$(LISA_DIR) --epsilon=30
 
-
-# remove AE so they can be re-computed
+# remove AE (e.g. so they can be re-computed)
 clean :
 	\rm -rf ./output/images
 
 # kills all output, including the CNN weights
 bare : 
 	\rm -rf ./output
+
+# creates a tar file with all images
+tar :
+	cd output && tar cvf ../images.tar ./images
