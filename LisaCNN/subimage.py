@@ -1,5 +1,7 @@
 """
 Code to facilitate working with sub-images/regions within larger images.
+
+This module also contains some LISA-specific codes (that could be moved elsewhere later).
 """
 
 __author__ = "mjp"
