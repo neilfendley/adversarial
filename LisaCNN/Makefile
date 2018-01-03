@@ -25,7 +25,7 @@ $(CLEVERHANS_DIR) :
 #   2.  Runs some adversarial attacks on a previously trained network.
 # 
 lisa-cnn : $(CLEVERHANS_DIR)
-	PYTHONPATH=$(CLEVERHANS_DIR) python ./train_lisacnn.py --data_dir=$(LISA_DIR) --epsilon=30
+	PYTHONPATH=$(CLEVERHANS_DIR) python ./train_lisacnn.py --data_dir=$(LISA_DIR) --epsilon=10
 
 # remove AE (e.g. so they can be re-computed)
 clean :
@@ -33,7 +33,7 @@ clean :
 
 # kills all output, including the CNN weights
 bare : 
-	\rm -rf ./output
+	\rm -rf ./output ./lisa_data.npz
 
 # creates a tar file with all images
 tar :
