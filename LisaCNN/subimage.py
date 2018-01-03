@@ -74,14 +74,23 @@ class Subimage(object):
     return out, y[indices]
 
 
-  def get_subimages(self, indices, new_size=None):
+  def get_subimages(self, indices, new_size=None, pct_context=0):
     "Extracts sub-indices from images."
     out = []
     for idx in indices:
       im = Image.open(self._filenames[idx])
-      im = im.crop(self._bbox[idx])
+      bbox = self._bbox[idx]
+
+      # (optional) grab some additional context
+      if pct_context > 0:
+        bbox = [(1+pct_context)*x for x in bbox]
+      
+      im = im.crop(bbox)
+
+      # (optional) resize subimage
       if new_size is not None:
         im = im.resize(new_size, Image.ANTIALIAS)
+
       out.append(np.array(im))
 
     y = np.array(self._y)
@@ -180,29 +189,34 @@ def parse_LISA(csvfile, class_map=LISA_17_CLASS_MAP):
 
 #-------------------------------------------------------------------------------
 
-if __name__ == "__main__":
-  # example usage
+
+def _test_splicing():
   si = parse_LISA('~/Data/LISA/allAnnotations.csv')
 
-  # this should approximate table I in Evtimov et al. fairly closely
-  train_idx, test_idx = si.train_test_split(.17, max_per_class=500)
-
-  assert(np.intersect1d(train_idx, test_idx).size == 0)
-
-  print(si.describe(train_idx))
-  print(si.describe(test_idx))
-
-  print('extracting sub-images...')
-  x_test, y_test = si.get_subimages(test_idx, (32,32))
-  x_test = np.array(x_test) # condense into a tensor
-  print('done!')
-
-  # sanity check the splicing operation
-  print('testing splice code...')
-  indices = test_idx[:100]
+  # ensures that, without resizing, one can paste the
+  # exact sub-image back into the original image
+  indices = np.arange(100)
   x_big, _ = si.get_images(indices)
   x_small, _ = si.get_subimages(indices, None)
   x_splice = si.splice_subimages(indices, x_small)
 
   for ii in range(len(x_splice)):
     assert(np.all(x_splice[ii] == x_big[ii]))
+
+  return si
+
+
+if __name__ == "__main__":
+  si = _test_splicing() 
+
+  # this should approximate table I in Evtimov et al. fairly closely
+  train_idx, test_idx = si.train_test_split(.17, max_per_class=500)
+  print(si.describe(train_idx))
+  print(si.describe(test_idx))
+
+  # save sub-images to file for manual inspection
+  print('extracting sub-images...')
+  x_test, y_test = si.get_subimages(test_idx, (32,32), pct_context=.5)
+  x_test = np.array(x_test) # [] -> tensor
+  print(x_test.shape) # TEMP
+  np.savez('test_images.npz', x_test=x_test, y_test=y_test)
