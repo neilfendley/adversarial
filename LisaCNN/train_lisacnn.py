@@ -34,7 +34,6 @@ flags.DEFINE_string(
 flags.DEFINE_integer('nb_epochs', 60, 'Number of epochs to train model')
 flags.DEFINE_integer('nb_classes', 48, 'Number of classes')
 flags.DEFINE_integer('batch_size', 128, 'Size of training batches')
-flags.DEFINE_integer('input_dim', 38, 'Size of input images')
 flags.DEFINE_float('learning_rate', 0.0001, 'Learning rate for training')
 flags.DEFINE_float('epsilon', 20, 'FGSM perturbation constraint')
 flags.DEFINE_bool('DO_CONF', False, 'Generate the confusion matrix on the test set')
@@ -88,13 +87,10 @@ def makedirs_if_needed(dirname):
 
 
 
-def load_lisa_data(annotation_file='~/Data/LISA/allAnnotations.csv',sz=32):
+def load_lisa_data(annotation_file='~/Data/LISA/allAnnotations.csv'):
     """
     Loads LISA data set.
     
-    For now, always reloads the data from the original images.
-    A possible TODO is to implement serialization for subimage class.
-
     FLAGS:
         annotation_file: main LISA annotation file
 
@@ -105,6 +101,8 @@ def load_lisa_data(annotation_file='~/Data/LISA/allAnnotations.csv',sz=32):
         ytest: numpy array of test labels
     """
     cache_fn = './data.npz'
+    sz = 32+6
+    pct_context = 6./sz
 
     if not os.path.exists(cache_fn):
         si = subimage.parse_LISA(annotation_file)
@@ -112,12 +110,14 @@ def load_lisa_data(annotation_file='~/Data/LISA/allAnnotations.csv',sz=32):
         print(si.describe(train_idx))
         print(si.describe(test_idx))
 
-        x_train, y_train = si.get_subimages(train_idx, (sz,sz))
+        x_train, y_train = si.get_subimages(train_idx, (sz,sz), pct_context)
         x_train = np.array(x_train) # list -> tensor
 
-        x_test, y_test = si.get_subimages(test_idx, (sz,sz))
+        x_test, y_test = si.get_subimages(test_idx, (sz,sz), pct_context)
         x_test = np.array(x_test) # list -> tensor
-        np.savez(cache_fn, x_train=x_train, y_train=y_train, x_test=x_test, y_test=y_test)
+        np.savez(cache_fn, train_idx=train_idx, test_idx=test_idx, 
+                           x_train=x_train, y_train=y_train, 
+                           x_test=x_test, y_test=y_test)
     else:
         f = np.load(cache_fn)
         x_train = f['x_train']
@@ -211,7 +211,7 @@ def data_lisa(per_class_limit=500):
     """
     # NOTE: it would appear the LISA annotation extraction code introduces some 
     #       label noise.  Therefore, we do the extraction ourselves.
-    X_train, Y_train, X_test, Y_test = load_lisa_data(sz=FLAGS.input_dim)
+    X_train, Y_train, X_test, Y_test = load_lisa_data()
 
     X_train = X_train.astype('float32')
     X_test = X_test.astype('float32')
@@ -237,7 +237,7 @@ def data_lisa(per_class_limit=500):
 
 
 
-def make_lisa_cnn(sess, batch_size, dim=32):
+def make_lisa_cnn(sess, batch_size, dim):
     """ Note that the network produced by cnn_model() is fairly weak.
         For example, on CIFAR-10 it gets 60-something percent accuracy,
         which substantially below state-of-the-art.
@@ -259,6 +259,9 @@ def make_lisa_cnn(sess, batch_size, dim=32):
 
 def run_in_batches(sess, x_tf, y_tf, output_tf, x_in, y_in, batch_size):
     """ 
+     Runs data through a CNN one batch at a time; gathers all results
+     together into a single tensor.
+
         sess      : the tensorflow session to use
         x_tf      : placeholder for input x
         y_tf      : placeholder for input y
@@ -299,13 +302,13 @@ def train_lisa_cnn(sess, cnn_weight_file):
     """ Trains the LISA-CNN network.
 
     """
-    model, x, y = make_lisa_cnn(sess, FLAGS.batch_size, FLAGS.input_dim)
+    X_train, Y_train, X_test, Y_test = data_lisa()
+
+    model, x, y = make_lisa_cnn(sess, FLAGS.batch_size, X_train.shape[1])
 
     # construct an explicit predictions variable
     x_crop = tf.random_crop(x, (FLAGS.batch_size, 32, 32, 3))
     model_output = model(x_crop)
-
-    X_train, Y_train, X_test, Y_test = data_lisa()
 
     def evaluate():
         # Evaluate accuracy of the lisaCNN model on clean test examples.
@@ -347,13 +350,14 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     """ Generates AE for the LISA-CNN.
         Assumes you have already run train_lisa_cnn() to train the network.
     """
-    att_batch_size = FLAGS.batch_size
-
     # Adversarial attack
     X_train, Y_train, X_test, Y_test = data_lisa()
 
     # restore model
-    model, x, y = make_lisa_cnn(sess)
+    model, x, y = make_lisa_cnn(sess, FLAGS.batch_size, X_train.shape[1])
+    x_crop = tf.random_crop(x, (FLAGS.batch_size, 32, 32, 3))
+    model_output = model(x_crop)
+
     saver = tf.train.Saver()
     saver.restore(sess, cnn_weight_file)
 
@@ -363,24 +367,27 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
 
     if np.isscalar(y_target):
         # targeted attack
-        y_vec = y_target * np.ones((att_batch_size,), dtype=np.int32)
+        y_vec = y_target * np.ones((FLAGS.batch_size,), dtype=np.int32)
         y_target_oh = to_categorical(y_vec, Y_test.shape[1])
-        x_adv = fgsm.generate(x, eps=FLAGS.epsilon, y_target=y_target_oh)
+        x_adv = fgsm.generate(x_crop, eps=FLAGS.epsilon, y_target=y_target_oh)
     else:
+        # non-targeted attack
         x_adv = fgsm.generate(x, eps=FLAGS.epsilon)
 
     # Create a model to attack.
     # In this case, it is the same model used to generate AE (ie. LISA-CNN)
     model_tgt = model
-    pred_tgt = model_tgt(x_adv)
+    x_adv_crop = tf.random_crop(x_adv, (FLAGS.batch_size, 32, 32, 3))
+    pred_tgt = model_tgt(x_adv_crop)
 
-    accuracy = model_eval(sess, x, y, pred_tgt, X_test, Y_test, args={'batch_size' : att_batch_size})
-    print('Test accuracy on adversarial examples: ' + str(accuracy))
+    preds = run_in_batches(sess, x, y, pred_tgt, X_test, Y_test, FLAGS.batch_size)
+    acc = 1. * np.sum(np.argmax(preds, axis=1) == np.argmax(Y_test, axis=1)) / Y_test.shape[0]
+    print('Test accuracy on adversarial examples: ' + str(acc))
 
     if np.isscalar(y_target):
       tmp = y_target * np.ones((Y_test.shape[0],), dtype=np.int32)
       y_synthetic = to_categorical(tmp, Y_test.shape[1])
-      tgt_acc = model_eval(sess, x, y, pred_tgt, X_test, y_synthetic, args={'batch_size' : att_batch_size})
+      tgt_acc = model_eval(sess, x, y, pred_tgt, X_test, y_synthetic, args={'batch_size' : FLAGS.batch_size})
       print('Targeted attack success rate: ' + str(tgt_acc))
 
     if FLAGS.save_adv_img:
