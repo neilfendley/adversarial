@@ -81,10 +81,22 @@ class Subimage(object):
       im = Image.open(self._filenames[idx])
       bbox = self._bbox[idx]
 
-      # (optional) grab some additional context
+      # (optional) expand box to grab additional context.
+      # currently assumes sub-images are well within the interior of the image.
       if pct_context > 0:
-        bbox = [(1+pct_context)*x for x in bbox]
-      
+        dx = bbox[2] - bbox[0]
+        dy = bbox[3] - bbox[1]
+        dx_new = dx * (1. + pct_context)
+        dy_new = dy * (1. + pct_context)
+
+        x0 = np.floor((bbox[2] + bbox[0])/2 - dx_new/2.)
+        x1 = np.floor((bbox[2] + bbox[0])/2 + dx_new/2.)
+        y0 = np.floor((bbox[3] + bbox[1])/2 - dy_new/2.)
+        y1 = np.floor((bbox[3] + bbox[1])/2 + dy_new/2.)
+
+        bbox = [int(x0), int(y0), int(x1), int(y1)]
+
+      # crop out the sub-image
       im = im.crop(bbox)
 
       # (optional) resize subimage
