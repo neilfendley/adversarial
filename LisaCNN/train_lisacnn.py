@@ -60,24 +60,28 @@ def to_categorical(y, num_classes, dtype=np.float32, smooth=False):
     return out
 
 
+def calc_acc(y_true_OH, y_hat_OH):
+    is_correct = np.argmax(y_hat_OH, axis=1) == np.argmax(y_true_OH, axis=1)
+    return 1. * np.sum(is_correct) / y_hat_OH.shape[0]
 
-def downsample_data_set(x, y, max_per_class):
-    """ Downsamples a data set so that the maximum number of 
-        representatives from any one class is max_per_class.
 
-        x : a tensor of feature data with shape (n, ...) where n is the number of examples.
-        y : a vector of integer class labels with shape (n,)
-    """
-    y_all = np.unique(y)
-    to_keep = np.zeros((y.size,), dtype=np.bool)
-
-    for yi in y_all:
-        indices = np.nonzero(y == yi)[0]
-        if len(indices) > max_per_class:
-            indices = np.random.choice(indices, max_per_class, replace=False)
-        to_keep[indices] = True
-
-    return x[to_keep,...], y[to_keep]
+#def downsample_data_set(x, y, max_per_class):
+#    """ Downsamples a data set so that the maximum number of 
+#        representatives from any one class is max_per_class.
+#
+#        x : a tensor of feature data with shape (n, ...) where n is the number of examples.
+#        y : a vector of integer class labels with shape (n,)
+#    """
+#    y_all = np.unique(y)
+#    to_keep = np.zeros((y.size,), dtype=np.bool)
+#
+#    for yi in y_all:
+#        indices = np.nonzero(y == yi)[0]
+#        if len(indices) > max_per_class:
+#            indices = np.random.choice(indices, max_per_class, replace=False)
+#        to_keep[indices] = True
+#
+#    return x[to_keep,...], y[to_keep]
 
 
 
@@ -87,7 +91,7 @@ def makedirs_if_needed(dirname):
 
 
 
-def load_lisa_data(annotation_file='~/Data/LISA/allAnnotations.csv'):
+def load_lisa_data(with_context=True, grayscale=True):
     """
     Loads LISA data set.
     
@@ -100,26 +104,59 @@ def load_lisa_data(annotation_file='~/Data/LISA/allAnnotations.csv'):
         xtest: numpy array of test data
         ytest: numpy array of test labels
     """
-    cache_fn = './data.npz'
-    sz = 32+6
-    pct_context = 6./sz
+    annotation_file = '~/Data/LISA/allAnnotations.csv'
+    cache_fn = 'lisa_data.npz'
 
+    # Create the dataset if it does not already exist.
+    # Note that we create it once, up front, so that we
+    # can ensure a consistent train/test split across all experiments.
     if not os.path.exists(cache_fn):
+        print('[LLD]: Extracting sign images from video frames...please wait...')
+
         si = subimage.parse_LISA(annotation_file)
         train_idx, test_idx = si.train_test_split(.17, max_per_class=500)
         print(si.describe(train_idx))
         print(si.describe(test_idx))
 
-        x_train, y_train = si.get_subimages(train_idx, (sz,sz), pct_context)
+        # extract data *without* context
+        x_train, y_train = si.get_subimages(train_idx, (32,32), 0.0)
         x_train = np.array(x_train) # list -> tensor
+        y_train = np.array(y_train)
 
-        x_test, y_test = si.get_subimages(test_idx, (sz,sz), pct_context)
+        x_test, y_test = si.get_subimages(test_idx, (32,32), 0.0)
         x_test = np.array(x_test) # list -> tensor
-        np.savez(cache_fn, train_idx=train_idx, test_idx=test_idx, 
-                           x_train=x_train, y_train=y_train, 
-                           x_test=x_test, y_test=y_test)
+        y_test = np.array(y_test)
+
+        # extract data *with* context
+        sz = 38
+        pct = (38-32)/38.
+        x_train_c, y_train_c = si.get_subimages(train_idx, (sz,sz), pct)
+        x_train_c = np.array(x_train_c)
+        y_train_c = np.array(y_train_c)
+
+        x_test_c, y_test_c = si.get_subimages(test_idx, (sz,sz), pct)
+        x_test_c = np.array(x_test_c)
+        y_test_c = np.array(y_test_c) 
+
+        np.savez(cache_fn, train_idx=train_idx,  
+                           test_idx=test_idx, 
+                           x_train=x_train, 
+                           y_train=y_train, 
+                           x_test=x_test, 
+                           y_test=y_test,
+                           x_train_context=x_train_c, 
+                           y_train_context=y_train_c,
+                           x_test_context=x_test_c, 
+                           y_test_context=y_test_c)
+
+    f = np.load(cache_fn)
+
+    if with_context:
+        x_train = f['x_train_context']
+        y_train = f['y_train_context']
+        x_test = f['x_test_context']
+        y_test = f['y_test_context']
     else:
-        f = np.load(cache_fn)
         x_train = f['x_train']
         y_train = f['y_train']
         x_test = f['x_test']
@@ -128,6 +165,7 @@ def load_lisa_data(annotation_file='~/Data/LISA/allAnnotations.csv'):
     #
     # UPDATE:
     # Make test size a multiple of batch size due to CH issues in model_eval
+    # TODO: can we remove this  now that we don't require model_eval?
     #
     rem = np.mod(x_test.shape[0], FLAGS.batch_size)
     if rem != 0:
@@ -137,6 +175,7 @@ def load_lisa_data(annotation_file='~/Data/LISA/allAnnotations.csv'):
         print(x_test.shape, y_test.shape)
 
     return x_train, y_train, x_test, y_test
+
 
 
 def old_load_lisa_data():
@@ -197,7 +236,7 @@ def old_load_lisa_data():
 
 
 
-def data_lisa(per_class_limit=500):
+def data_lisa(with_context):
     """
     Funtion to read in the data prepared by the lisa dataset
     The train test split will be randomly generated, or loaded if you have a /tmp 
@@ -211,7 +250,7 @@ def data_lisa(per_class_limit=500):
     """
     # NOTE: it would appear the LISA annotation extraction code introduces some 
     #       label noise.  Therefore, we do the extraction ourselves.
-    X_train, Y_train, X_test, Y_test = load_lisa_data()
+    X_train, Y_train, X_test, Y_test = load_lisa_data(with_context)
 
     X_train = X_train.astype('float32')
     X_test = X_test.astype('float32')
@@ -219,7 +258,7 @@ def data_lisa(per_class_limit=500):
     # Note: we moved the affine rescaling directly into the network
 
     # Downsample to promote class balance during training
-    X_train, Y_train = downsample_data_set(X_train, Y_train, per_class_limit)
+    #X_train, Y_train = downsample_data_set(X_train, Y_train, per_class_limit)
 
     print('X_train shape:', X_train.shape)
     print('Y_train shape:', Y_train.shape)
@@ -232,26 +271,31 @@ def data_lisa(per_class_limit=500):
 
     Y_train = to_categorical(Y_train, FLAGS.nb_classes)
     Y_test = to_categorical(Y_test, FLAGS.nb_classes)
-    
+
     return X_train, Y_train, X_test, Y_test
 
 
 
 def make_lisa_cnn(sess, batch_size, dim):
-    """ Note that the network produced by cnn_model() is fairly weak.
-        For example, on CIFAR-10 it gets 60-something percent accuracy,
-        which substantially below state-of-the-art.
-    """
-    num_classes=48
-    x = tf.placeholder(tf.float32, shape=(batch_size, dim, dim, 3))
-    y = tf.placeholder(tf.float32, shape=(batch_size, num_classes))
+    """  Creates a simple sign classification network.
+    
+    Note that the network produced by cnn_model() is fairly weak.
+    For example, on CIFAR-10 it gets 60-something percent accuracy,
+    which substantially below state-of-the-art.
 
-    # Puts data into [-.5,.5]
-    x = (x / 255.) - 0.5
+    Note: it is not required here that dim be the same as the
+    CNN input spatial dimensions.  In these cases, the
+    caller is responsible for resizing x to make it
+    compatible with the model (e.g. via random crops).
+    """
+    num_classes=48  # 17 vs 48
+    num_channels=1
+    x = tf.placeholder(tf.float32, shape=(batch_size, dim, dim, num_channels))
+    y = tf.placeholder(tf.float32, shape=(batch_size, num_classes))
 
     # XXX: set layer naming convention explicitly? 
     #      Otherwise, names depend upon when model was created...
-    model = cnn_model(img_rows=32, img_cols=32, channels=3, nb_classes=num_classes)
+    model = cnn_model(img_rows=32, img_cols=32, channels=num_channels, nb_classes=num_classes)
 
     return model, x, y
 
@@ -302,12 +346,12 @@ def train_lisa_cnn(sess, cnn_weight_file):
     """ Trains the LISA-CNN network.
 
     """
-    X_train, Y_train, X_test, Y_test = data_lisa()
+    X_train, Y_train, X_test, Y_test = data_lisa(with_context=True)
 
     model, x, y = make_lisa_cnn(sess, FLAGS.batch_size, X_train.shape[1])
 
     # construct an explicit predictions variable
-    x_crop = tf.random_crop(x, (FLAGS.batch_size, 32, 32, 3))
+    x_crop = tf.random_crop(x, (FLAGS.batch_size, 32, 32, X_train.shape[-1]))
     model_output = model(x_crop)
 
     def evaluate():
@@ -350,13 +394,12 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     """ Generates AE for the LISA-CNN.
         Assumes you have already run train_lisa_cnn() to train the network.
     """
-    # Adversarial attack
-    X_train, Y_train, X_test, Y_test = data_lisa()
+    # Note: we load the version of the data *without* extra context
+    X_train, Y_train, X_test, Y_test = data_lisa(with_context=False)
 
-    # restore model
+    # This is the model we will attack
     model, x, y = make_lisa_cnn(sess, FLAGS.batch_size, X_train.shape[1])
-    x_crop = tf.random_crop(x, (FLAGS.batch_size, 32, 32, 3))
-    model_output = model(x_crop)
+    model_output = model(x)
 
     saver = tf.train.Saver()
     saver.restore(sess, cnn_weight_file)
@@ -369,29 +412,36 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
         # targeted attack
         y_vec = y_target * np.ones((FLAGS.batch_size,), dtype=np.int32)
         y_target_oh = to_categorical(y_vec, Y_test.shape[1])
-        x_adv = fgsm.generate(x_crop, eps=FLAGS.epsilon, y_target=y_target_oh)
+        x_adv = fgsm.generate(x, eps=FLAGS.epsilon, y_target=y_target_oh)
     else:
         # non-targeted attack
         x_adv = fgsm.generate(x, eps=FLAGS.epsilon)
 
-    # Create a model to attack.
-    # In this case, it is the same model used to generate AE (ie. LISA-CNN)
-    model_tgt = model
-    x_adv_crop = tf.random_crop(x_adv, (FLAGS.batch_size, 32, 32, 3))
-    pred_tgt = model_tgt(x_adv_crop)
-
-    preds = run_in_batches(sess, x, y, pred_tgt, X_test, Y_test, FLAGS.batch_size)
-    acc = 1. * np.sum(np.argmax(preds, axis=1) == np.argmax(Y_test, axis=1)) / Y_test.shape[0]
-    print('Test accuracy on adversarial examples: ' + str(acc))
-
+    #
+    # Run the attack (targeted or untargeted)
+    # on the test data.
+    #
     if np.isscalar(y_target):
-      tmp = y_target * np.ones((Y_test.shape[0],), dtype=np.int32)
-      y_synthetic = to_categorical(tmp, Y_test.shape[1])
-      tgt_acc = model_eval(sess, x, y, pred_tgt, X_test, y_synthetic, args={'batch_size' : FLAGS.batch_size})
-      print('Targeted attack success rate: ' + str(tgt_acc))
+        tmp = y_target * np.ones((Y_test.shape[0],), dtype=np.int32)
+        y_synthetic = to_categorical(tmp, Y_test.shape[1])
+        X_adv = run_in_batches(sess, x, y, x_adv, X_test, y_synthetic, FLAGS.batch_size)
+    else:
+        X_adv = run_in_batches(sess, x, y, x_adv, X_test, Y_test, FLAGS.batch_size)
+
+    #
+    # Evaluate the AE. 
+    # Here, we use the same model we attacked.
+    #
+    model_eval = model
+    preds_tf = model_eval(x)
+    preds = run_in_batches(sess, x, y, preds_tf, X_adv, Y_test, FLAGS.batch_size)
+    print('Test accuracy on adversarial examples: %0.3f' % calc_acc(Y_test, preds))
+    print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
+
+    pdb.set_trace() # TEMP
 
     if FLAGS.save_adv_img:
-        pdb.set_trace() # TEMP
+
         # MJP: This code breaks when running targeted attacks.
         #      May be due to experimental nature of this API...
         adv_part = sess.partial_run_setup([x_adv, pred_tgt], [x])
@@ -435,6 +485,7 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
 
 def main(argv=None):
     # Set TF random seed to improve reproducibility
+    np.random.seed(1066)
     tf.set_random_seed(1246)
 
     # the CNN weight file
