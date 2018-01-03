@@ -18,10 +18,11 @@ from sklearn.model_selection import train_test_split
 
 
 class Subimage(object):
-  def __init__(self):
+  def __init__(self, to_grayscale=False):
     self._filenames = []
     self._bbox = []
     self._y = []
+    self._to_grayscale = to_grayscale
 
 
   def __str__(self):
@@ -68,6 +69,10 @@ class Subimage(object):
     out = []
     for idx in indices:
       im = Image.open(self._filenames[idx])
+
+      if self._to_grayscale:
+        im = im.convert('L')
+
       out.append(np.array(im))
 
     y = np.array(self._y)
@@ -79,6 +84,9 @@ class Subimage(object):
     out = []
     for idx in indices:
       im = Image.open(self._filenames[idx])
+      if self._to_grayscale:
+        im = im.convert('L')
+
       bbox = self._bbox[idx]
 
       # (optional) expand box to grab additional context.
@@ -103,7 +111,11 @@ class Subimage(object):
       if new_size is not None:
         im = im.resize(new_size, Image.ANTIALIAS)
 
-      out.append(np.array(im))
+      im_arr = np.array(im)
+      if im_arr.ndim == 2:
+        im_arr = im_arr[:,:,np.newaxis] # force channel dimension
+
+      out.append(np.array(im_arr))
 
     y = np.array(self._y)
     return out, y[indices]
@@ -119,7 +131,10 @@ class Subimage(object):
     out = []
 
     for ii, idx in enumerate(indices):
-      xi = np.array(Image.open(self._filenames[idx]))
+      im = Image.open(self._filenames[idx])
+      if self._to_grayscale:
+        im = im.convert('L')
+      xi = np.array(im)
 
       # the bounding box
       x0,y0,x1,y1 = self._bbox[idx]
@@ -137,7 +152,7 @@ class Subimage(object):
         si = Image(xi).resize((width,height), Image.ANTIALIAS)
         si = np.array(xi)
 
-      xi[y0:y1,x0:x1] = si
+      xi[y0:y1,x0:x1] = np.squeeze(si)
       out.append(xi)
 
     return out
@@ -158,7 +173,7 @@ LISA_17_CLASS_MAP = { x : ii for ii,x in enumerate(LISA_17_CLASSES) }
 
 def parse_LISA(csvfile, class_map=LISA_17_CLASS_MAP):
   "See also: tools/extractAnnotations.py in LISA dataset."
-  si = Subimage()
+  si = Subimage(to_grayscale=True)
 
   csvfile = os.path.expanduser(csvfile)
 
