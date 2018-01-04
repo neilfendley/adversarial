@@ -102,6 +102,7 @@ def calc_acc(y_true_OH, y_hat_OH):
     return 1. * np.sum(is_correct) / y_hat_OH.shape[0]
 
 
+
 def makedirs_if_needed(dirname):
     if not os.path.exists(dirname):
         os.makedirs(dirname)
@@ -148,6 +149,31 @@ def run_in_batches(sess, x_tf, y_tf, output_tf, x_in, y_in, batch_size):
     out = np.concatenate(out, axis=0)
     assert(out.shape[0] == n_examples)
     return out
+
+
+
+def save_images_and_estimates(x, y_true_OH, y_est_OH, base_dir, y_to_classname=None):
+    correct_dir = os.path.join(base_dir, 'correctly_classified')
+    incorrect_dir = os.path.join(base_dir, 'incorrectly_classified')
+
+    for idx in range(x.shape[0]):
+        y_true = np.argmax(y_true_OH[idx,...])
+        y_est = np.argmax(y_est_OH[idx,...])
+
+        y_true_str = y_to_classname[y_true] if y_to_classname is not None else str(y_true)
+        y_est_str = y_to_classname[y_est] if y_to_classname is not None else str(y_est)
+
+        fn = 'image%05d_y%02d_%s.png' % (idx, y_true, y_true_str)
+
+        if y_true == y_est:
+            out_dir = os.path.join(correct_dir, y_est_str)
+        else:
+            out_dir = os.path.join(incorrect_dir, y_est_str)
+        makedirs_if_needed(out_dir)
+
+        img = Image.fromarray(np.squeeze(x[idx]).astype('uint8'))
+        img.save(os.path.join(out_dir, fn))
+
 
 
 #-------------------------------------------------------------------------------
@@ -312,7 +338,6 @@ def make_lisa_cnn(sess, batch_size, dim):
 
 
 
-
 def train_lisa_cnn(sess, cnn_weight_file):
     """ Trains the LISA-CNN network.
     """
@@ -372,12 +397,15 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     saver.restore(sess, cnn_weight_file)
 
     #--------------------------------------------------
-    # Before attacking, verify performance is good on clean data
+    # Performance on clean data
+    # (try this before attacking)
     #--------------------------------------------------
     predictions = run_in_batches(sess, x_tf, y_tf, model(x_tf), X_test, Y_test, FLAGS.batch_size)
     acc_clean = 100. * calc_acc(Y_test, predictions)
     print('[info]: accuracy on clean test data: %0.2f' % acc_clean)
     print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(predictions, axis=1)))
+
+    save_images_and_estimates(X_test, Y_test, predictions, 'output/Images/Original', subimage.LISA_17_CLASSES)
 
     #--------------------------------------------------
     # Fast Gradient Attack
@@ -405,6 +433,8 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     print('Test accuracy on adversarial examples: %0.3f' % calc_acc(Y_test, preds))
     print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
     print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
+
+    save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/FGM', subimage.LISA_17_CLASSES)
 
     #--------------------------------------------------
     # Iterative attack
@@ -437,6 +467,8 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
     print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
 
+    save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/Iterative_FGM', subimage.LISA_17_CLASSES)
+
     return # TEMP
 
     #--------------------------------------------------
@@ -445,61 +477,6 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     attack = CarliniWagnerL2(model, sess=sess)
     x_adv_tf = attack.generate(x_tf, confidence=.1, y_target=Y_target_OB)
 
-    if Y_target is not None:
-        X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_target, FLAGS.batch_size)
-    else:
-        X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_test, FLAGS.batch_size)
-
-    model_eval = model
-    preds_tf = model_eval(x_tf)
-    preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
-    print('Test accuracy on adversarial examples: %0.3f' % calc_acc(Y_test, preds))
-    print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
-    print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
-
-
-    pdb.set_trace() # TEMP
-    if FLAGS.save_adv_img:
-
-        # MJP: This code breaks when running targeted attacks.
-        #      May be due to experimental nature of this API...
-        adv_part = sess.partial_run_setup([x_adv, pred_tgt], [x])
-        adv_out = sess.partial_run(adv_part, x_adv, feed_dict={x:X_test})
-        preds_adv = sess.partial_run(adv_part, pred_tgt)
-
-        #  Define the directories to save adversarial images
-        #
-        # MJP: updating directory layout slightly.
-        #
-        fooled_adv_dir = os.path.join(FLAGS.train_dir, 'images/fooled_FGSM%0.2f/' % FLAGS.epsilon)
-        correct_predicted_dir = os.path.join(FLAGS.train_dir, 'images/not_fooled_FGSM%0.2f/' % FLAGS.epsilon)
-        for dirname in [fooled_adv_dir, correct_predicted_dir]:
-            makedirs_if_needed(os.path.join(dirname, 'adv'))
-            makedirs_if_needed(os.path.join(dirname, 'orig'))
-
-        #  Keep track of the total images, and how many are correctly detected
-        total_images = 0
-        correct_predictions = 0
-        for i in range(len(X_test)):
-            adv_img = adv_out[i] + .5
-            adv_img *= 255
-            adv_pred = preds_adv[i]
-            adv_pil = Image.fromarray(adv_img.astype('uint8'))
-            truth = Y_test[i]
-            if np.argmax(adv_pred) == np.argmax(truth):
-                out_dir = correct_predicted_dir
-                #adv_pil.save(os.path.join(correct_predicted_dir,'adversarial_image'+str(total_images)+'.jpg'))
-                correct_predictions += 1
-            else:
-                out_dir = fooled_adv_dir
-                #adv_pil.save(os.path.join(fooled_adv_dir,'adversarial_image'+str(total_images)+'.jpg'))
-            total_images += 1
-
-            orig_im = Image.fromarray(X_test[i].astype('uint8'))
-            orig_im.save(os.path.join(out_dir, 'orig', 'image'+str(total_images)+'.jpg'))
-            adv_pil.save(os.path.join(out_dir, 'adv', 'image'+str(total_images)+'.jpg'))
-                
-        print(float(correct_predictions)/total_images)
 
 #-------------------------------------------------------------------------------
 #-------------------------------------------------------------------------------
