@@ -1,5 +1,11 @@
 #!/bin/env python
 
+""" Code for attacking a simple CNN trained on the LISA street sign data set.
+
+REFERENCES:
+ - LISA data set http://cvrr.ucsd.edu/LISA/lisa-traffic-sign-dataset.html
+"""
+
 
 import os
 import random
@@ -131,7 +137,7 @@ def load_lisa_data(with_context=True):
         ytest: numpy array of test labels
     """
     annotation_file = '~/Data/LISA/allAnnotations.csv'
-    cache_fn = 'lisa_data.npz'
+    cache_fn = './output/lisa_data.npz'
 
     # Create the dataset if it does not already exist.
     # Note that we create it once, up front, so that we
@@ -177,6 +183,7 @@ def load_lisa_data(with_context=True):
             x_test_c /= 255.
 
         # save for quicker reload next time
+        makedirs_if_needed(os.path.dirname(cache_fn))
         np.savez(cache_fn, train_idx=train_idx,  
                            test_idx=test_idx, 
                            x_train=x_train, 
@@ -201,79 +208,11 @@ def load_lisa_data(with_context=True):
         x_test = f['x_test']
         y_test = f['y_test']
 
-    #
-    # UPDATE:
-    # Make test size a multiple of batch size due to CH issues in model_eval
-    # TODO: can we remove this  now that we don't require model_eval?
-    #
-    rem = np.mod(x_test.shape[0], FLAGS.batch_size)
-    if rem != 0:
-        print('WARNING: trucating eval size by %d' % rem)
-        x_test = x_test[:-rem,...]
-        y_test = y_test[:-rem,...]
 
-    print('[load_lisa_data]: train data: ', x_train.shape, x_train.dtype, np.min(x_train), np.max(x_train))
-    print('[load_lisa_data]: test data:  ', x_test.shape, x_test.dtype, np.min(x_test), np.max(x_test))
+    for string, data in zip(['train data', 'train labels', 'test data', 'test labels'], [x_train, y_train, x_test, y_test]):
+        print('[load_lisa_data]: ', string, data.shape, data.dtype, np.min(data), np.max(data))
 
     return x_train, y_train, x_test, y_test
-
-
-
-def old_load_lisa_data():
-       # Check if you have created the numpy arrays already
-    if os.path.exists(os.path.join(FLAGS.train_dir,'ytest.npy')):
-        X_train = np.load(os.path.join(FLAGS.train_dir, 'xtrain.npy'))
-        Y_train = np.load(os.path.join(FLAGS.train_dir, 'ytrain.npy'))
-        X_test = np.load(os.path.join(FLAGS.train_dir, 'xtest.npy'))
-        Y_test = np.load(os.path.join(FLAGS.train_dir, 'ytest.npy'))
-    else:
-        X_train = []
-        Y_train = []
-        X_test = []
-        Y_test = []
-        counter = 0
-        class_counter = 0
-        classes = 48
-        pic_list = os.listdir(FLAGS.data_dir)
-        # This is so we have a constant class mapping
-        mapping = 'class_mapping.json'
-        if os.path.exists(mapping):
-            with open(mapping, 'r') as fr:
-                cat_dict = json.load(fr)
-        else:
-            print("[ ERROR ]: No class mapping file")
-            cat_dict = {}
-        cat_total = {}
-        cat_test = {}
-        total_img = len(pic_list)
-        #Randomize the train test split
-        random.shuffle(pic_list)
-        # Read in the image, resize it  to (32, 32) and parse the class
-        for pic_url in pic_list:
-            x_pil = Image.open(os.path.join(FLAGS.data_dir,pic_url))
-            x = x_pil.resize((32,32), Image.ANTIALIAS)
-            x_resize = np.array(x)
-            cat = pic_url.split('_')[1]
-            if cat not in cat_total.keys():
-                cat_total[cat] = 0
-                cat_test[cat] = 0
-            y = cat_dict[cat]
-            if cat_total[cat] == 0 or (float(cat_test[cat]) / cat_total[cat] > .1):
-                X_train.append(x_resize)
-                Y_train.append(y)
-            else:
-                X_test.append(x_resize)
-                Y_test.append(y)
-                cat_test[cat] += 1
-            cat_total[cat] += 1
-
-            counter += 1
-        os.mkdir(FLAGS.train_dir)
-        np.save(os.path.join(FLAGS.train_dir, 'xtrain.npy'), X_train)
-        np.save(os.path.join(FLAGS.train_dir, 'ytrain.npy'), Y_train)
-        np.save(os.path.join(FLAGS.train_dir, 'xtest.npy'), X_test)
-        np.save(os.path.join(FLAGS.train_dir, 'ytest.npy'), Y_test)
-    return np.asarray(X_train), np.asarray(Y_train), np.asarray(X_test), np.asarray(Y_test)
 
 
 
@@ -329,7 +268,7 @@ def make_lisa_cnn(sess, batch_size, dim):
     caller is responsible for resizing x to make it
     compatible with the model (e.g. via random crops).
     """
-    num_classes=48  # 17 vs 48
+    num_classes=48  # usually only use 17 vs 48 classes, but it doesn't hurt to have room for 48
     num_channels=1
     x = tf.placeholder(tf.float32, shape=(batch_size, dim, dim, num_channels))
     y = tf.placeholder(tf.float32, shape=(batch_size, num_classes))
@@ -345,7 +284,8 @@ def make_lisa_cnn(sess, batch_size, dim):
 def run_in_batches(sess, x_tf, y_tf, output_tf, x_in, y_in, batch_size):
     """ 
      Runs data through a CNN one batch at a time; gathers all results
-     together into a single tensor.
+     together into a single tensor.  This assumes the output of each
+     batch is tensor-like.
 
         sess      : the tensorflow session to use
         x_tf      : placeholder for input x
@@ -364,21 +304,22 @@ def run_in_batches(sess, x_tf, y_tf, output_tf, x_in, y_in, batch_size):
 
     out = []
     with sess.as_default():
-        for batch in range(nb_batches):
-            # Note: last batch may be smaller than all others...
-            start = batch * batch_size
+        for start in np.arange(0, n_examples, batch_size):
+            # the min() stuff here is to handle the last batch, which may be partial
             end = min(n_examples, start + batch_size)
-            cur_batch_size = end - start
+            start_actual = min(start, n_examples - batch_size)
 
-            feed_dict = {x_tf : x_in[start:end], y_tf : y_in[start:end]}
+            feed_dict = {x_tf : x_in[start_actual:end], y_tf : y_in[start_actual:end]}
             output_i = sess.run(output_tf, feed_dict=feed_dict)
 
             # the slice is to avoid any extra stuff in last mini-batch,
             # which might not be entirely "full"
-            output_i = output_i[:cur_batch_size]
+            skip = start - start_actual
+            output_i = output_i[skip:]
             out.append(output_i)
 
     out = np.concatenate(out, axis=0)
+    assert(out.shape[0] == n_examples)
     return out
 
 
@@ -397,12 +338,8 @@ def train_lisa_cnn(sess, cnn_weight_file):
 
     def evaluate():
         # Evaluate accuracy of the lisaCNN model on clean test examples.
-        eval_params = {'batch_size': FLAGS.batch_size}
-        accuracy = model_eval(sess, x, y, model_output, X_test, Y_test, args=eval_params)
-        print('Test accuracy on legitimate test examples: ' + str(accuracy))
         preds = run_in_batches(sess, x, y, model_output, X_test, Y_test, FLAGS.batch_size)
-        acc2 = 1. * np.sum(np.argmax(preds, axis=1) == np.argmax(Y_test, axis=1)) / Y_test.shape[0]
-        print('second check: ' + str(acc2))
+        print('test accuracy: ', calc_acc(Y_test, preds))
 
     # Note: model_train() will add some new (Adam-related) variables to the graph
     train_params = {
