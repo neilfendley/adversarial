@@ -72,6 +72,7 @@ def to_categorical(y, num_classes, dtype=np.float32, smooth=False):
     return out
 
 
+
 def categorical_matrix(y_scalar, num_copies, num_classes, *args, **kargs):
     """ Creates a matrix of one-hot target class labels
         (for use with targeted attacks).  
@@ -82,8 +83,9 @@ def categorical_matrix(y_scalar, num_copies, num_classes, *args, **kargs):
             0 1 0 0 0 0 0 0 0 0 ;
             0 1 0 0 0 0 0 0 0 0 ]
     """
-    y_tgt = y_scalar * np.ones((num_copies,), dtype=int32)
+    y_tgt = y_scalar * np.ones((num_copies,), dtype=np.int32)
     return to_categorical(y_tgt, num_classes, *args, **kargs)
+
 
 
 def calc_acc(y_true_OH, y_hat_OH):
@@ -326,7 +328,6 @@ def run_in_batches(sess, x_tf, y_tf, output_tf, x_in, y_in, batch_size):
 
 def train_lisa_cnn(sess, cnn_weight_file):
     """ Trains the LISA-CNN network.
-
     """
     X_train, Y_train, X_test, Y_test = data_lisa(with_context=True)
 
@@ -353,19 +354,6 @@ def train_lisa_cnn(sess, cnn_weight_file):
     save_path = saver.save(sess, cnn_weight_file)
     print("Model was saved to " +  cnn_weight_file)
 
-    if FLAGS.DO_CONF:
-        preds = np.argmax(predictions.eval(session=sess,feed_dict={x : X_test}),axis=1)
-        y_test = np.argmax(Y_test, axis=1)
-        conf = confusion_matrix(y_test, preds)
-        wrong = 0
-        total = 0
-        for y,yt in zip(y_test, preds):
-            if y != yt:
-                wrong += 1
-            total += 1
-        acc = 1 - (float(wrong) / total)
-        df = pd.DataFrame(conf)
-
 
 
 def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
@@ -378,18 +366,19 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     # Note: we load the version of the data *without* extra context
     X_train, Y_train, X_test, Y_test = data_lisa(with_context=False)
 
-    # Create one-hot target labels (if needed)
+    # Create one-hot target labels (needed for targeted attacks only)
     if y_target is not None:
-        y_vec = y_target * np.ones((FLAGS.batch_size,), dtype=np.int32)
-        y_target_oh = to_categorical(y_vec, Y_test.shape[1])
+        Y_target_OB = categorical_matrix(y_target, FLAGS.batch_size, Y_test.shape[1])
+        Y_target = categorical_matrix(y_target, Y_test.shape[0], Y_test.shape[1])
     else:
-        y_target_oh = None
+        Y_target_OB = None
+        Y_target = None
 
     #--------------------------------------------------
     # Initialize model that we will attack
     #--------------------------------------------------
     model, x_tf, y_tf = make_lisa_cnn(sess, FLAGS.batch_size, X_train.shape[1])
-    model_output = model(x)
+    model_output = model(x_tf)
     # TODO: wrap in cleverhans Model object
 
     saver = tf.train.Saver()
@@ -399,40 +388,39 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     # Before attacking, verify performance is good on clean data
     #--------------------------------------------------
     predictions = run_in_batches(sess, x_tf, y_tf, model(x_tf), X_test, Y_test, FLAGS.batch_size)
-    acc_clean = calc_acc(Y_test, predictions)
-    print('[info]: accuracy on clean test data: %0.2f' % 100*acc_clean)
+    acc_clean = 100. * calc_acc(Y_test, predictions)
+    print('[info]: accuracy on clean test data: %0.2f' % acc_clean)
+    print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(predictions, axis=1)))
 
     #--------------------------------------------------
     # Fast Gradient Attack
     #--------------------------------------------------
     # symbolic representation of attack
     attack = FastGradientMethod(model, sess=sess)
-    x_adv_tf = attack.generate(x, eps=FLAGS.epsilon, y_target=y_target_oh)
-
-    attack = CarliniWagnerL2(model, sess=sess)
+    x_adv_tf = attack.generate(x_tf, eps=FLAGS.epsilon, y_target=Y_target_OB)
 
     #
     # Run the attack (targeted or untargeted)
     # on the test data.
     #
-    if np.isscalar(y_target):
-        tmp = y_target * np.ones((Y_test.shape[0],), dtype=np.int32)
-        y_synthetic = to_categorical(tmp, Y_test.shape[1])
-        X_adv = run_in_batches(sess, x, y, x_adv, X_test, y_synthetic, FLAGS.batch_size)
+    if Y_target is not None:
+        X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_target, FLAGS.batch_size)
     else:
-        X_adv = run_in_batches(sess, x, y, x_adv, X_test, Y_test, FLAGS.batch_size)
+        X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_test, FLAGS.batch_size)
 
     #
     # Evaluate the AE. 
-    # Here, we use the same model we attacked.
+    # Currently using the same model we originally attacked.
     #
     model_eval = model
-    preds_tf = model_eval(x)
-    preds = run_in_batches(sess, x, y, preds_tf, X_adv, Y_test, FLAGS.batch_size)
+    preds_tf = model_eval(x_tf)
+    preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
     print('Test accuracy on adversarial examples: %0.3f' % calc_acc(Y_test, preds))
     print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
+    print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
 
     pdb.set_trace() # TEMP
+    attack = CarliniWagnerL2(model, sess=sess)
 
     if FLAGS.save_adv_img:
 
