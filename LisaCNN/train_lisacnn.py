@@ -1,6 +1,6 @@
 #!/bin/env python
 
-""" Code for attacking a simple CNN trained on the LISA street sign data set.
+""" Code for developing and attacking a simple street sign detector.
 
 REFERENCES:
  - LISA data set http://cvrr.ucsd.edu/LISA/lisa-traffic-sign-dataset.html
@@ -48,6 +48,9 @@ flags.DEFINE_bool('force_retrain', False, 'Ignore if you have already trained a 
 flags.DEFINE_bool('save_adv_img', True, 'Save the adversarial images generated on the test set')
 
 
+#-------------------------------------------------------------------------------
+# Helper/utility functions
+#-------------------------------------------------------------------------------
 
 def to_categorical(y, num_classes, dtype=np.float32, smooth=False):
     """ Converts a vector of integer class labels into a one-hot matrix representation.
@@ -104,6 +107,52 @@ def makedirs_if_needed(dirname):
         os.makedirs(dirname)
 
 
+
+def run_in_batches(sess, x_tf, y_tf, output_tf, x_in, y_in, batch_size):
+    """ 
+     Runs data through a CNN one batch at a time; gathers all results
+     together into a single tensor.  This assumes the output of each
+     batch is tensor-like.
+
+        sess      : the tensorflow session to use
+        x_tf      : placeholder for input x
+        y_tf      : placeholder for input y
+        output_tf : placeholder for CNN output
+        x_in      : data set to process (numpy tensor)
+        y_in      : associated labels (numpy, one-hot encoding)
+        batch_size : minibatch size (scalar)
+
+    """
+    n_examples = x_in.shape[0]  # total num. of objects to feed
+
+    # determine how many mini-batches are required
+    nb_batches = int(math.ceil(float(n_examples) / batch_size))
+    assert nb_batches * batch_size >= n_examples
+
+    out = []
+    with sess.as_default():
+        for start in np.arange(0, n_examples, batch_size):
+            # the min() stuff here is to handle the last batch, which may be partial
+            end = min(n_examples, start + batch_size)
+            start_actual = min(start, n_examples - batch_size)
+
+            feed_dict = {x_tf : x_in[start_actual:end], y_tf : y_in[start_actual:end]}
+            output_i = sess.run(output_tf, feed_dict=feed_dict)
+
+            # the slice is to avoid any extra stuff in last mini-batch,
+            # which might not be entirely "full"
+            skip = start - start_actual
+            output_i = output_i[skip:]
+            out.append(output_i)
+
+    out = np.concatenate(out, axis=0)
+    assert(out.shape[0] == n_examples)
+    return out
+
+
+#-------------------------------------------------------------------------------
+# LISA-CNN codes
+#-------------------------------------------------------------------------------
 
 def load_lisa_data(with_context=True):
     """
@@ -261,48 +310,6 @@ def make_lisa_cnn(sess, batch_size, dim):
 
     return model, x, y
 
-
-
-def run_in_batches(sess, x_tf, y_tf, output_tf, x_in, y_in, batch_size):
-    """ 
-     Runs data through a CNN one batch at a time; gathers all results
-     together into a single tensor.  This assumes the output of each
-     batch is tensor-like.
-
-        sess      : the tensorflow session to use
-        x_tf      : placeholder for input x
-        y_tf      : placeholder for input y
-        output_tf : placeholder for CNN output
-        x_in      : data set to process (numpy tensor)
-        y_in      : associated labels (numpy, one-hot encoding)
-        batch_size : minibatch size (scalar)
-
-    """
-    n_examples = x_in.shape[0]  # total num. of objects to feed
-
-    # determine how many mini-batches are required
-    nb_batches = int(math.ceil(float(n_examples) / batch_size))
-    assert nb_batches * batch_size >= n_examples
-
-    out = []
-    with sess.as_default():
-        for start in np.arange(0, n_examples, batch_size):
-            # the min() stuff here is to handle the last batch, which may be partial
-            end = min(n_examples, start + batch_size)
-            start_actual = min(start, n_examples - batch_size)
-
-            feed_dict = {x_tf : x_in[start_actual:end], y_tf : y_in[start_actual:end]}
-            output_i = sess.run(output_tf, feed_dict=feed_dict)
-
-            # the slice is to avoid any extra stuff in last mini-batch,
-            # which might not be entirely "full"
-            skip = start - start_actual
-            output_i = output_i[skip:]
-            out.append(output_i)
-
-    out = np.concatenate(out, axis=0)
-    assert(out.shape[0] == n_examples)
-    return out
 
 
 
@@ -494,6 +501,8 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
                 
         print(float(correct_predictions)/total_images)
 
+#-------------------------------------------------------------------------------
+#-------------------------------------------------------------------------------
 
 def main(argv=None):
     # Set TF random seed to improve reproducibility
