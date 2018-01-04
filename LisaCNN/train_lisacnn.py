@@ -99,26 +99,6 @@ def calc_acc(y_true_OH, y_hat_OH):
     return 1. * np.sum(is_correct) / y_hat_OH.shape[0]
 
 
-#def downsample_data_set(x, y, max_per_class):
-#    """ Downsamples a data set so that the maximum number of 
-#        representatives from any one class is max_per_class.
-#
-#        x : a tensor of feature data with shape (n, ...) where n is the number of examples.
-#        y : a vector of integer class labels with shape (n,)
-#    """
-#    y_all = np.unique(y)
-#    to_keep = np.zeros((y.size,), dtype=np.bool)
-#
-#    for yi in y_all:
-#        indices = np.nonzero(y == yi)[0]
-#        if len(indices) > max_per_class:
-#            indices = np.random.choice(indices, max_per_class, replace=False)
-#        to_keep[indices] = True
-#
-#    return x[to_keep,...], y[to_keep]
-
-
-
 def makedirs_if_needed(dirname):
     if not os.path.exists(dirname):
         os.makedirs(dirname)
@@ -397,7 +377,7 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     #--------------------------------------------------
     # symbolic representation of attack
     attack = FastGradientMethod(model, sess=sess)
-    x_adv_tf = attack.generate(x_tf, eps=FLAGS.epsilon, y_target=Y_target_OB)
+    x_adv_tf = attack.generate(x_tf, eps=FLAGS.epsilon, y_target=Y_target_OB, clip_min=0, clip_max=255)
 
     #
     # Run the attack (targeted or untargeted)
