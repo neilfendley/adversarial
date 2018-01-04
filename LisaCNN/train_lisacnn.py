@@ -18,7 +18,7 @@ from tensorflow.python.platform import flags
 
 import keras
 
-from cleverhans.attacks import FastGradientMethod
+from cleverhans.attacks import FastGradientMethod, BasicIterativeMethod, CarliniWagnerL2
 from cleverhans.utils_keras import cnn_model
 from cleverhans.utils_tf import model_train, model_eval, batch_eval
 
@@ -45,6 +45,12 @@ flags.DEFINE_bool('save_adv_img', True, 'Save the adversarial images generated o
 
 def to_categorical(y, num_classes, dtype=np.float32, smooth=False):
     """ Converts a vector of integer class labels into a one-hot matrix representation.
+
+      e.g.  [1 3 7] becomes:
+
+          [0 1 0 0 0 0 0 0 0 0 0 ;
+           0 0 0 1 0 0 0 0 0 0 0 ;
+           0 0 0 0 0 0 0 1 0 0 0 ]
     """
     out = np.zeros((y.size, num_classes), dtype=dtype)
 
@@ -60,7 +66,27 @@ def to_categorical(y, num_classes, dtype=np.float32, smooth=False):
     return out
 
 
+def categorical_matrix(y_scalar, num_copies, num_classes, *args, **kargs):
+    """ Creates a matrix of one-hot target class labels
+        (for use with targeted attacks).  
+
+        e.g. categorical_matrix(1,3,10) is
+
+          [ 0 1 0 0 0 0 0 0 0 0 ;
+            0 1 0 0 0 0 0 0 0 0 ;
+            0 1 0 0 0 0 0 0 0 0 ]
+    """
+    y_tgt = y_scalar * np.ones((num_copies,), dtype=int32)
+    return to_categorical(y_tgt, num_classes, *args, **kargs)
+
+
 def calc_acc(y_true_OH, y_hat_OH):
+    """ Computes classification accuracy from a pair of one-hot estimates/truth.
+
+    It doesn't really matter if the arguments are one-hot; just need the
+    argmax along dimension 1 gives the estimated class label.
+
+    """
     is_correct = np.argmax(y_hat_OH, axis=1) == np.argmax(y_true_OH, axis=1)
     return 1. * np.sum(is_correct) / y_hat_OH.shape[0]
 
@@ -91,7 +117,7 @@ def makedirs_if_needed(dirname):
 
 
 
-def load_lisa_data(with_context=True, grayscale=True):
+def load_lisa_data(with_context=True):
     """
     Loads LISA data set.
     
@@ -111,14 +137,16 @@ def load_lisa_data(with_context=True, grayscale=True):
     # Note that we create it once, up front, so that we
     # can ensure a consistent train/test split across all experiments.
     if not os.path.exists(cache_fn):
-        print('[LLD]: Extracting sign images from video frames...please wait...')
+        print('[load_lisa_data]: Extracting sign images from video frames...please wait...')
 
         si = subimage.parse_LISA(annotation_file)
         train_idx, test_idx = si.train_test_split(.17, max_per_class=500)
         print(si.describe(train_idx))
         print(si.describe(test_idx))
 
-        # extract data *without* context
+        #
+        # signs *without* extra context
+        #
         x_train, y_train = si.get_subimages(train_idx, (32,32), 0.0)
         x_train = np.array(x_train) # list -> tensor
         y_train = np.array(y_train)
@@ -127,7 +155,9 @@ def load_lisa_data(with_context=True, grayscale=True):
         x_test = np.array(x_test) # list -> tensor
         y_test = np.array(y_test)
 
-        # extract data *with* context
+        #
+        # signs *with* extra context
+        #
         sz = 38
         pct = (38-32)/38.
         x_train_c, y_train_c = si.get_subimages(train_idx, (sz,sz), pct)
@@ -138,6 +168,15 @@ def load_lisa_data(with_context=True, grayscale=True):
         x_test_c = np.array(x_test_c)
         y_test_c = np.array(y_test_c) 
 
+        # (optional) rescale
+        # with the default hyperparameters, this actually hurts performance...
+        if 0:
+            x_train /= 255.
+            x_test /= 255.
+            x_train_c /= 255.
+            x_test_c /= 255.
+
+        # save for quicker reload next time
         np.savez(cache_fn, train_idx=train_idx,  
                            test_idx=test_idx, 
                            x_train=x_train, 
@@ -172,7 +211,9 @@ def load_lisa_data(with_context=True, grayscale=True):
         print('WARNING: trucating eval size by %d' % rem)
         x_test = x_test[:-rem,...]
         y_test = y_test[:-rem,...]
-        print(x_test.shape, y_test.shape)
+
+    print('[load_lisa_data]: train data: ', x_train.shape, x_train.dtype, np.min(x_train), np.max(x_train))
+    print('[load_lisa_data]: test data:  ', x_test.shape, x_test.dtype, np.min(x_test), np.max(x_test))
 
     return x_train, y_train, x_test, y_test
 
@@ -394,28 +435,44 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     """ Generates AE for the LISA-CNN.
         Assumes you have already run train_lisa_cnn() to train the network.
     """
+    #--------------------------------------------------
+    # data set prep
+    #--------------------------------------------------
     # Note: we load the version of the data *without* extra context
     X_train, Y_train, X_test, Y_test = data_lisa(with_context=False)
 
-    # This is the model we will attack
-    model, x, y = make_lisa_cnn(sess, FLAGS.batch_size, X_train.shape[1])
+    # Create one-hot target labels (if needed)
+    if y_target is not None:
+        y_vec = y_target * np.ones((FLAGS.batch_size,), dtype=np.int32)
+        y_target_oh = to_categorical(y_vec, Y_test.shape[1])
+    else:
+        y_target_oh = None
+
+    #--------------------------------------------------
+    # Initialize model that we will attack
+    #--------------------------------------------------
+    model, x_tf, y_tf = make_lisa_cnn(sess, FLAGS.batch_size, X_train.shape[1])
     model_output = model(x)
+    # TODO: wrap in cleverhans Model object
 
     saver = tf.train.Saver()
     saver.restore(sess, cnn_weight_file)
 
-    # create attack
-    # TODO: wrap in cleverhans Model object
-    fgsm = FastGradientMethod(model, sess=sess)
+    #--------------------------------------------------
+    # Before attacking, verify performance is good on clean data
+    #--------------------------------------------------
+    predictions = run_in_batches(sess, x_tf, y_tf, model(x_tf), X_test, Y_test, FLAGS.batch_size)
+    acc_clean = calc_acc(Y_test, predictions)
+    print('[info]: accuracy on clean test data: %0.2f' % 100*acc_clean)
 
-    if np.isscalar(y_target):
-        # targeted attack
-        y_vec = y_target * np.ones((FLAGS.batch_size,), dtype=np.int32)
-        y_target_oh = to_categorical(y_vec, Y_test.shape[1])
-        x_adv = fgsm.generate(x, eps=FLAGS.epsilon, y_target=y_target_oh)
-    else:
-        # non-targeted attack
-        x_adv = fgsm.generate(x, eps=FLAGS.epsilon)
+    #--------------------------------------------------
+    # Fast Gradient Attack
+    #--------------------------------------------------
+    # symbolic representation of attack
+    attack = FastGradientMethod(model, sess=sess)
+    x_adv_tf = attack.generate(x, eps=FLAGS.epsilon, y_target=y_target_oh)
+
+    attack = CarliniWagnerL2(model, sess=sess)
 
     #
     # Run the attack (targeted or untargeted)
