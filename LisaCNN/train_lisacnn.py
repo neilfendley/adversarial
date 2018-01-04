@@ -419,9 +419,59 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
     print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
 
-    pdb.set_trace() # TEMP
-    attack = CarliniWagnerL2(model, sess=sess)
+    #--------------------------------------------------
+    # Iterative attack
+    #--------------------------------------------------
+    attack = BasicIterativeMethod(model, sess=sess)
+    x_adv_tf = attack.generate(x_tf, eps=FLAGS.epsilon, 
+                                     eps_iter=FLAGS.epsilon/2, 
+                                     nb_iter=100,
+                                     y_target=Y_target_OB, 
+                                     clip_min=0, 
+                                     clip_max=255)
 
+    #
+    # Run the attack (targeted or untargeted)
+    # on the test data.
+    #
+    if Y_target is not None:
+        X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_target, FLAGS.batch_size)
+    else:
+        X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_test, FLAGS.batch_size)
+
+    #
+    # Evaluate the AE. 
+    # Currently using the same model we originally attacked.
+    #
+    model_eval = model
+    preds_tf = model_eval(x_tf)
+    preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
+    print('Test accuracy on adversarial examples: %0.3f' % calc_acc(Y_test, preds))
+    print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
+    print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
+
+    return # TEMP
+
+    #--------------------------------------------------
+    # C&W ell-2
+    #--------------------------------------------------
+    attack = CarliniWagnerL2(model, sess=sess)
+    x_adv_tf = attack.generate(x_tf, confidence=.1, y_target=Y_target_OB)
+
+    if Y_target is not None:
+        X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_target, FLAGS.batch_size)
+    else:
+        X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_test, FLAGS.batch_size)
+
+    model_eval = model
+    preds_tf = model_eval(x_tf)
+    preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
+    print('Test accuracy on adversarial examples: %0.3f' % calc_acc(Y_test, preds))
+    print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
+    print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
+
+
+    pdb.set_trace() # TEMP
     if FLAGS.save_adv_img:
 
         # MJP: This code breaks when running targeted attacks.
