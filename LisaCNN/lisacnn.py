@@ -494,7 +494,7 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     #--------------------------------------------------
     attack = ElasticNetMethod(model, sess=sess)
     c_vals = [0.1, 1, 10, 1e2]
-    acc_all_elastic = np.zeros(c_vals.shape)
+    acc_all_elastic = np.zeros((len(c_vals),))
 
     for idx, c in enumerate(c_vals):
         x_adv_tf = attack.generate(x_tf, 
