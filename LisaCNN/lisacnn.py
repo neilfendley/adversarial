@@ -160,6 +160,9 @@ def save_images_and_estimates(x, y_true_OH, y_est_OH, base_dir, y_to_classname=N
     correct_dir = os.path.join(base_dir, 'correctly_classified')
     incorrect_dir = os.path.join(base_dir, 'incorrectly_classified')
 
+    if np.max(x) <= 1.0:
+        x = x * 255.
+
     for idx in range(x.shape[0]):
         y_true = np.argmax(y_true_OH[idx,...])
         y_est = np.argmax(y_est_OH[idx,...])
@@ -376,8 +379,7 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     """ Generates AE for the LISA-CNN.
         Assumes you have already run train_lisa_cnn() to train the network.
     """
-    #epsilon_values_pct = [.02, .05, .1, .15, .2]
-    epsilon_values_pct = [0.05] # TEMP
+    epsilon_values_pct = [.02, .05, .1, .15, .2]
 
     #--------------------------------------------------
     # data set prep
@@ -445,7 +447,7 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
         print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
         print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
 
-        save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/FGM_%02d' % epsilon, subimage.LISA_17_CLASSES)
+        save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/FGM_%0.2f' % epsilon, subimage.LISA_17_CLASSES)
         acc_all_fgm[idx] = calc_acc(Y_test, preds)
 
     #--------------------------------------------------
@@ -482,9 +484,11 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
         print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
         print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
 
-        save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/Iterative_FGM_%02d' % epsilon, subimage.LISA_17_CLASSES)
+        save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/Iterative_FGM_%0.2f' % epsilon, subimage.LISA_17_CLASSES)
         acc_all_ifgm[idx] = calc_acc(Y_test, preds)
 
+
+    return # TEMP
 
     #--------------------------------------------------
     # Elastic Net
@@ -492,13 +496,14 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     #--------------------------------------------------
     attack = ElasticNetMethod(model, sess=sess)
 
-    # TODO: loop over \beta, like we do for epsilon?
+    # TODO: loop over c, like we do for epsilon?
+    c = 1e2
     x_adv_tf = attack.generate(x_tf, 
                                batch_size=FLAGS.batch_size,
                                y_target=Y_target_OB, 
                                beta=1e-3,            # ell_1 coeff
                                confidence=1e-2,      # \kappa value from equation (4)
-                               initial_const=1e3,    # (an initial value for) c from eq. (7) - note this value increases as binary search progresses...
+                               initial_const=c,      # (an initial value for) c from eq. (7) - note this value increases as binary search progresses...
                                clip_min=0.0,
                                clip_max=c_max)
 
@@ -508,12 +513,6 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     #
     if Y_target is not None:
         X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_target, FLAGS.batch_size)
-        #X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test[:128], Y_target[:128], FLAGS.batch_size)
-        #preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test[:128], FLAGS.batch_size)
-        #print(calc_acc(Y_test[:128], preds))
-        #print('mu: ', np.mean(np.abs(X_test[:128] - X_adv)))
-        #print('l2: ', np.sqrt(np.sum((X_test[:128] - X_adv)**2)))
-        #pdb.set_trace() # TEMP
     else:
         X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_test, FLAGS.batch_size)
 
@@ -531,7 +530,7 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     print('l1: ', np.sum(np.abs(X_test - X_adv)))
     print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
 
-    save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/Elastic_%02d' % epsilon, subimage.LISA_17_CLASSES)
+    save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/Elastic_c%02d' % c, subimage.LISA_17_CLASSES)
 
 
     #--------------------------------------------------
