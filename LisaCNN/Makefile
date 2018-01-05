@@ -25,7 +25,7 @@ $(CLEVERHANS_DIR) :
 #   2.  Runs some adversarial attacks on a previously trained network.
 # 
 lisa-cnn : $(CLEVERHANS_DIR)
-	PYTHONPATH=$(CLEVERHANS_DIR) python ./train_lisacnn.py --data_dir=$(LISA_DIR) --epsilon=10
+	PYTHONPATH=$(CLEVERHANS_DIR) python ./lisacnn.py --data_dir=$(LISA_DIR) 
 
 # remove AE (e.g. so they can be re-computed)
 clean :
