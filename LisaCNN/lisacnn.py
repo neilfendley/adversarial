@@ -488,8 +488,6 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
         acc_all_ifgm[idx] = calc_acc(Y_test, preds)
 
 
-    return # TEMP
-
     #--------------------------------------------------
     # Elastic Net
     # Note: this attack takes awhile to compute...(compared to *FGSM)
