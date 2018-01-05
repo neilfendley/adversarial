@@ -28,7 +28,7 @@ from tensorflow.python.platform import flags
 
 import keras
 
-from cleverhans.attacks import FastGradientMethod, BasicIterativeMethod, CarliniWagnerL2
+from cleverhans.attacks import FastGradientMethod, BasicIterativeMethod, SaliencyMapMethod, VirtualAdversarialMethod, CarliniWagnerL2, ElasticNetMethod
 from cleverhans.utils_keras import cnn_model
 from cleverhans.utils_tf import model_train, model_eval, batch_eval
 
@@ -41,10 +41,10 @@ flags.DEFINE_string('train_dir', 'output', 'Directory storing the saved model an
 flags.DEFINE_string('data_dir','/home/neilf/Fendley/data/signDatabase/annotations', 'The Directory in which the extra lisadataset is')
 flags.DEFINE_string(
     'filename', 'lisacnn.ckpt', 'Filename to save model under.')
-flags.DEFINE_integer('nb_epochs', 60, 'Number of epochs to train model')
 flags.DEFINE_integer('nb_classes', 48, 'Number of classes')
+flags.DEFINE_integer('nb_epochs', 60, 'Number of epochs to train model')
 flags.DEFINE_integer('batch_size', 128, 'Size of training batches')
-flags.DEFINE_float('learning_rate', 0.0001, 'Learning rate for training')
+flags.DEFINE_float('learning_rate', 0.001, 'Learning rate for training') # use this for values in [0,1]
 flags.DEFINE_float('epsilon', 20, 'FGSM perturbation constraint')
 flags.DEFINE_bool('DO_CONF', False, 'Generate the confusion matrix on the test set')
 flags.DEFINE_bool('DO_ADV', True, 'Generate the adversarial examples on the test set')
@@ -103,7 +103,7 @@ def calc_acc(y_true_OH, y_hat_OH):
 
     """
     is_correct = np.argmax(y_hat_OH, axis=1) == np.argmax(y_true_OH, axis=1)
-    return 1. * np.sum(is_correct) / y_hat_OH.shape[0]
+    return 100. * np.sum(is_correct) / y_hat_OH.shape[0]
 
 
 
@@ -237,11 +237,11 @@ def load_lisa_data(with_context=True):
 
         # (optional) rescale
         # with the default hyperparameters, this actually hurts performance...
-        if 0:
-            x_train /= 255.
-            x_test /= 255.
-            x_train_c /= 255.
-            x_test_c /= 255.
+        if 1:
+            x_train = x_train.astype(np.float32) / 255.
+            x_test = x_test.astype(np.float32) / 255.
+            x_train_c = x_train_c.astype(np.float32) / 255.
+            x_test_c = x_test_c.astype(np.float32) / 255.
 
         # save for quicker reload next time
         makedirs_if_needed(os.path.dirname(cache_fn))
@@ -376,7 +376,8 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     """ Generates AE for the LISA-CNN.
         Assumes you have already run train_lisa_cnn() to train the network.
     """
-    epsilon_values = [2, 4, 6, 8, 10, 12, 15, 20]
+    #epsilon_values_pct = [.02, .05, .1, .15, .2]
+    epsilon_values_pct = [0.05] # TEMP
 
     #--------------------------------------------------
     # data set prep
@@ -391,6 +392,10 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     else:
         Y_target_OB = None
         Y_target = None
+
+    # bound the perturbation
+    c_max = np.max(X_test)
+    epsilon_values = np.array(epsilon_values_pct) * c_max
 
     #--------------------------------------------------
     # Initialize model that we will attack
@@ -407,11 +412,12 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     # (try this before attacking)
     #--------------------------------------------------
     predictions = run_in_batches(sess, x_tf, y_tf, model(x_tf), X_test, Y_test, FLAGS.batch_size)
-    acc_clean = 100. * calc_acc(Y_test, predictions)
+    acc_clean = calc_acc(Y_test, predictions)
     print('[info]: accuracy on clean test data: %0.2f' % acc_clean)
     print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(predictions, axis=1)))
 
     save_images_and_estimates(X_test, Y_test, predictions, 'output/Images/Original', subimage.LISA_17_CLASSES)
+
 
     #--------------------------------------------------
     # Fast Gradient Attack
@@ -421,7 +427,7 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     acc_all_fgm = np.zeros((len(epsilon_values),))
 
     for idx, epsilon in enumerate(epsilon_values):
-        x_adv_tf = attack.generate(x_tf, eps=epsilon, y_target=Y_target_OB, clip_min=0, clip_max=255)
+        x_adv_tf = attack.generate(x_tf, eps=epsilon, y_target=Y_target_OB, clip_min=0.0, clip_max=c_max)
 
         if Y_target is not None:
             X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_target, FLAGS.batch_size)
@@ -435,7 +441,7 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
         model_eval = model
         preds_tf = model_eval(x_tf)
         preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
-        print('Test accuracy on adversarial examples: %0.3f' % calc_acc(Y_test, preds))
+        print('Test accuracy after FGM attack: %0.2f' % calc_acc(Y_test, preds))
         print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
         print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
 
@@ -450,11 +456,11 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
 
     for idx, epsilon in enumerate(epsilon_values):
         x_adv_tf = attack.generate(x_tf, eps=epsilon, 
-                                     eps_iter=epsilon/2, 
+                                     eps_iter=epsilon/4., 
                                      nb_iter=100,
                                      y_target=Y_target_OB, 
-                                     clip_min=0, 
-                                     clip_max=255)
+                                     clip_min=0.0,
+                                     clip_max=c_max)
 
         #
         # Run the attack (targeted or untargeted)
@@ -472,12 +478,98 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
         model_eval = model
         preds_tf = model_eval(x_tf)
         preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
-        print('Test accuracy on adversarial examples: %0.3f' % calc_acc(Y_test, preds))
+        print('Test accuracy after I-FGM attack: %0.2f' % calc_acc(Y_test, preds))
         print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
         print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
 
         save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/Iterative_FGM_%02d' % epsilon, subimage.LISA_17_CLASSES)
         acc_all_ifgm[idx] = calc_acc(Y_test, preds)
+
+
+    #--------------------------------------------------
+    # Elastic Net
+    # Note: this attack takes awhile to compute...(compared to *FGSM)
+    #--------------------------------------------------
+    attack = ElasticNetMethod(model, sess=sess)
+
+    # TODO: loop over \beta, like we do for epsilon?
+    x_adv_tf = attack.generate(x_tf, 
+                               batch_size=FLAGS.batch_size,
+                               y_target=Y_target_OB, 
+                               beta=1e-3,            # ell_1 coeff
+                               confidence=1e-2,      # \kappa value from equation (4)
+                               initial_const=1e3,    # (an initial value for) c from eq. (7) - note this value increases as binary search progresses...
+                               clip_min=0.0,
+                               clip_max=c_max)
+
+    #
+    # Run the attack (targeted or untargeted)
+    # on the test data.
+    #
+    if Y_target is not None:
+        X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_target, FLAGS.batch_size)
+        #X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test[:128], Y_target[:128], FLAGS.batch_size)
+        #preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test[:128], FLAGS.batch_size)
+        #print(calc_acc(Y_test[:128], preds))
+        #print('mu: ', np.mean(np.abs(X_test[:128] - X_adv)))
+        #print('l2: ', np.sqrt(np.sum((X_test[:128] - X_adv)**2)))
+        #pdb.set_trace() # TEMP
+    else:
+        X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_test, FLAGS.batch_size)
+
+    #
+    # Evaluate the AE. 
+    # Currently using the same model we originally attacked.
+    #
+    model_eval = model
+    preds_tf = model_eval(x_tf)
+    preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
+    print('Test accuracy after E-Net attack: %0.2f' % calc_acc(Y_test, preds))
+    print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
+    print('Mean per-pixel delta: %0.1f' % np.mean(np.abs(X_test - X_adv)))
+    print('l2: ', np.sqrt(np.sum((X_test - X_adv)**2)))
+    print('l1: ', np.sum(np.abs(X_test - X_adv)))
+    print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
+
+    save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/Elastic_%02d' % epsilon, subimage.LISA_17_CLASSES)
+
+
+    #--------------------------------------------------
+    # Saliency Map Attack
+    # Note: this is *extremely* slow; will require overnight runs
+    #--------------------------------------------------
+    attack = SaliencyMapMethod(model, sess=sess)
+    acc_all_saliency = np.zeros((len(epsilon_values),))
+
+    #for idx, epsilon in enumerate(epsilon_values):
+    if False:
+        x_adv_tf = attack.generate(x_tf, theta=epsilon/255., 
+                                     y_target=y_tf,
+                                     clip_min=0.0, 
+                                     clip_max=255.0)
+
+        #
+        # Run the attack (targeted or untargeted)
+        # on the test data.
+        #
+        if Y_target is not None:
+            X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_target, FLAGS.batch_size)
+        else:
+            X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_test, FLAGS.batch_size)
+
+        #
+        # Evaluate the AE. 
+        # Currently using the same model we originally attacked.
+        #
+        model_eval = model
+        preds_tf = model_eval(x_tf)
+        preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
+        print('Test accuracy after SMM attack: %0.3f' % calc_acc(Y_test, preds))
+        print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
+        print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
+
+        save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/Saliency_%02d' % epsilon, subimage.LISA_17_CLASSES)
+        acc_all_saliency[idx] = calc_acc(Y_test, preds)
 
 
     #--------------------------------------------------
@@ -496,6 +588,7 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     plt.legend()
     plt.xlabel('epsilon')
     plt.ylabel('CNN accuracy')
+    plt.grid('on')
     plt.savefig('./output/attack_accuracy_plot.png', bbox_inches='tight')
 
 
