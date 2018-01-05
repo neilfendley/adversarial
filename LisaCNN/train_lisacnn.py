@@ -203,7 +203,7 @@ def load_lisa_data(with_context=True):
         print('[load_lisa_data]: Extracting sign images from video frames...please wait...')
 
         si = subimage.parse_LISA(annotation_file)
-        train_idx, test_idx = si.train_test_split(.17, max_per_class=500)
+        train_idx, test_idx = si.train_test_split(.17, max_per_class=500, reserve_for_test=['stop_1323803184.avi_image'])
         print(si.describe(train_idx))
         print(si.describe(test_idx))
 
