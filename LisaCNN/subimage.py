@@ -46,13 +46,25 @@ class Subimage(object):
     return out
 
 
-  def train_test_split(self, pct_test, max_per_class=np.Inf):
-    indices = np.arange(len(self._filenames))
+  def train_test_split(self, pct_test, max_per_class=np.Inf, reserve_for_test=[]):
     assert(pct_test < 1.0)
 
-    train, test = train_test_split(indices, test_size=pct_test, stratify=self._y)
+    # (optional): there may be certain images we want to explicitly reserve for test
+    reserved_indices = []
+    for pattern in reserve_for_test:
+      for idx, filename in enumerate(self._filenames):
+        if pattern in filename:
+          reserved_indices.append(idx)
+    reserved_indices = np.array(reserved_indices, dtype=np.int32)
 
-    # (optional): limit max # of examples in a given class
+    # generate the train/test split
+    indices = np.delete(np.arange(len(self._y)), reserved_indices)
+    class_labels = np.delete(np.array(self._y, dtype=np.int32), reserved_indices)
+
+    train, test = train_test_split(indices, test_size=pct_test, stratify=class_labels)
+    test = np.concatenate([test, np.array(reserved_indices, dtype=np.int32)])
+
+    # (optional): limit max # of examples in a given class (for training)
     if np.isfinite(max_per_class):
       y = np.array(self._y)
 
@@ -60,7 +72,7 @@ class Subimage(object):
         yi_idx = np.nonzero(y[train] == yi)[0]
         if len(yi_idx) > max_per_class:
           train = np.delete(train, yi_idx[max_per_class:])
-          
+
     return train, test
 
 
@@ -233,8 +245,21 @@ def _test_splicing():
   return si
 
 
+def _test_reserve_images():
+  si = parse_LISA('~/Data/LISA/allAnnotations.csv')
+  prefix = 'stop_1323803184.avi_image'
+  train, test = si.train_test_split(.17, max_per_class=500, reserve_for_test=[prefix,])
+
+  for idx in train:
+    assert(not prefix in si._filenames[idx])
+
+
+
 if __name__ == "__main__":
-  si = _test_splicing() 
+  _test_splicing() 
+  _test_reserve_images()
+
+  si = parse_LISA('~/Data/LISA/allAnnotations.csv')
 
   # this should approximate table I in Evtimov et al. fairly closely
   train_idx, test_idx = si.train_test_split(.17, max_per_class=500)
