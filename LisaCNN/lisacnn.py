@@ -495,42 +495,44 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     # Note: this attack takes awhile to compute...(compared to *FGSM)
     #--------------------------------------------------
     attack = ElasticNetMethod(model, sess=sess)
+    c_vals = [0.1, 1, 10, 1e2]
+    acc_all_elastic = np.zeros(c_vals.shape)
 
-    # TODO: loop over c, like we do for epsilon?
-    c = 1e2
-    x_adv_tf = attack.generate(x_tf, 
-                               batch_size=FLAGS.batch_size,
-                               y_target=Y_target_OB, 
-                               beta=1e-3,            # ell_1 coeff
-                               confidence=1e-2,      # \kappa value from equation (4)
-                               initial_const=c,      # (an initial value for) c from eq. (7) - note this value increases as binary search progresses...
-                               clip_min=0.0,
-                               clip_max=c_max)
+    for idx, c in enumerate(c_vals):
+        x_adv_tf = attack.generate(x_tf, 
+                                   batch_size=FLAGS.batch_size,
+                                   y_target=Y_target_OB, 
+                                   beta=1e-3,            # ell_1 coeff
+                                   confidence=1e-2,      # \kappa value from equation (4)
+                                   initial_const=c,      # (an initial value for) c from eq. (7) - note this value increases as binary search progresses...
+                                   clip_min=0.0,
+                                   clip_max=c_max)
 
-    #
-    # Run the attack (targeted or untargeted)
-    # on the test data.
-    #
-    if Y_target is not None:
-        X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_target, FLAGS.batch_size)
-    else:
-        X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_test, FLAGS.batch_size)
+        #
+        # Run the attack (targeted or untargeted)
+        # on the test data.
+        #
+        if Y_target is not None:
+            X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_target, FLAGS.batch_size)
+        else:
+            X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_test, FLAGS.batch_size)
 
-    #
-    # Evaluate the AE. 
-    # Currently using the same model we originally attacked.
-    #
-    model_eval = model
-    preds_tf = model_eval(x_tf)
-    preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
-    print('Test accuracy after E-Net attack: %0.2f' % calc_acc(Y_test, preds))
-    print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
-    print('Mean per-pixel delta: %0.1f' % np.mean(np.abs(X_test - X_adv)))
-    print('l2: ', np.sqrt(np.sum((X_test - X_adv)**2)))
-    print('l1: ', np.sum(np.abs(X_test - X_adv)))
-    print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
+        #
+        # Evaluate the AE. 
+        # Currently using the same model we originally attacked.
+        #
+        model_eval = model
+        preds_tf = model_eval(x_tf)
+        preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
+        print('Test accuracy after E-Net attack: %0.2f' % calc_acc(Y_test, preds))
+        print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
+        print('Mean per-pixel delta: %0.1f' % np.mean(np.abs(X_test - X_adv)))
+        print('l2: ', np.sqrt(np.sum((X_test - X_adv)**2)))
+        print('l1: ', np.sum(np.abs(X_test - X_adv)))
+        print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
 
-    save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/Elastic_c%02d' % c, subimage.LISA_17_CLASSES)
+        save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/Elastic_c%02d' % c, subimage.LISA_17_CLASSES)
+        acc_all_elastic[idx] = calc_acc(Y_test, preds)
 
 
     #--------------------------------------------------
@@ -580,7 +582,7 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
 
 
     #--------------------------------------------------
-    # Post-attack Analysis
+    # Post-attack Analysis (ell infty attacks)
     #--------------------------------------------------
     plt.plot(epsilon_values, acc_all_fgm, 'o-', label='FGM')
     plt.plot(epsilon_values, acc_all_ifgm, 'o-', label='I-FGM')
