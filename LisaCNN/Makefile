@@ -29,7 +29,7 @@ lisa-cnn : $(CLEVERHANS_DIR)
 
 # remove AE (e.g. so they can be re-computed)
 clean :
-	\rm -rf ./output/images
+	\rm -rf ./output/Images ./output/Deltas ./output/*png
 
 # kills all output, including the CNN weights
 bare : 
