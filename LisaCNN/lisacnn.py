@@ -534,7 +534,6 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     # Post-attack Analysis for *FGM
     #--------------------------------------------------
     for ord in [np.inf, 1, 2]:
-        pdb.set_trace() # TEMP
         plt.plot(epsilon_map[ord], acc_fgm[ord], 'o-', label='FGM')
         plt.plot(epsilon_map[ord], acc_ifgm[ord], 'o-', label='I-FGM')
         plt.legend()
