@@ -143,6 +143,14 @@ class Subimage(object):
     out = []
 
     for ii, idx in enumerate(indices):
+      # extract the ith sub-image
+      if isinstance(new_subimage, list) or isinstance(new_subimage, tuple):
+        si = new_subimage[ii]
+      else:
+        si = new_subimage[ii,...]
+      assert(si.ndim >= 2)
+
+      # corresponding full scene
       im = Image.open(self._filenames[idx])
       if self._to_grayscale:
         im = im.convert('L')
@@ -154,15 +162,9 @@ class Subimage(object):
       height = y1-y0
 
       # resize new image (if needed) and blast into bounding box
-      if isinstance(new_subimage, list) or isinstance(new_subimage, tuple):
-        si = new_subimage[ii]
-      else:
-        si = new_subimage[ii,...]
-      assert(si.ndim >= 2)
-
       if si.shape[0] != height or si.shape[1] != width:
-        si = Image(xi).resize((width,height), Image.ANTIALIAS)
-        si = np.array(xi)
+        si = Image.fromarray(si).resize((width,height), Image.ANTIALIAS)
+        si = np.array(si)
 
       xi[y0:y1,x0:x1] = np.squeeze(si)
       out.append(xi)
