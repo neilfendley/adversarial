@@ -542,7 +542,9 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
         plt.title('ell_%s' % ord)
         plt.grid('on')
         plt.savefig('./output/attack_accuracy_%s.png' % ord, bbox_inches='tight')
-
+        plt.close()
+     
+        plt.figure()
         plt.plot(epsilon_map[ord], acc_tgt_fgm[ord], 'o-', label='FGM')
         plt.plot(epsilon_map[ord], acc_tgt_ifgm[ord], 'o-', label='I-FGM')
         plt.legend()
@@ -551,6 +553,7 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
         plt.title('ell_%s' % ord)
         plt.grid('on')
         plt.savefig('./output/targeted_attack_accuracy_%s.png' % ord, bbox_inches='tight')
+        plt.close()
 
 
 
