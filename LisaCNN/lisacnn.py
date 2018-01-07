@@ -56,6 +56,11 @@ flags.DEFINE_bool('save_adv_img', True, 'Save the adversarial images generated o
 # Helper/utility functions
 #-------------------------------------------------------------------------------
 
+def makedirs_if_needed(dirname):
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
+
+
 def to_categorical(y, num_classes, dtype=np.float32, smooth=False):
     """ Converts a vector of integer class labels into a one-hot matrix representation.
 
@@ -107,9 +112,27 @@ def calc_acc(y_true_OH, y_hat_OH):
 
 
 
-def makedirs_if_needed(dirname):
-    if not os.path.exists(dirname):
-        os.makedirs(dirname)
+def analyze_ae(X_orig, X_adv, Y_true_OH, preds_OH, desc, y_tgt=None):
+    """ Displays information re. the effectiveness of AE to stdout.
+    """
+    acc = calc_acc(Y_true_OH, preds_OH)
+    acc_tgt = None
+
+    print('Results for %s:' % desc)
+    print('    CNN Accuracy: %0.2f' % calc_acc(Y_true_OH, preds_OH))
+
+    if y_tgt is not None:
+        y_syn = categorical_matrix(y_tgt, Y_true_OH.shape[0], Y_true_OH.shape[1])
+        acc_tgt = calc_acc(y_syn, preds_OH)
+        print('    targeted AE success rate: %0.2f' % acc_tgt)
+
+    print('    ||x-x_ae||_inf: %0.3f' % np.max(np.abs(X_orig - X_adv)))
+    print('    ||x-x_ae||_1  : %0.3f' % np.sum(np.abs(X_orig - X_adv)))
+    print('    ||x-x_ae||_2  : %0.3f' % np.sum(np.sqrt((X_orig - X_adv)**2)))
+
+    print(confusion_matrix(np.argmax(Y_true_OH, axis=1), np.argmax(preds_OH, axis=1)))
+
+    return acc, acc_tgt
 
 
 
@@ -170,7 +193,7 @@ def save_images_and_estimates(x, y_true_OH, y_est_OH, base_dir, y_to_classname=N
         y_true_str = y_to_classname[y_true] if y_to_classname is not None else str(y_true)
         y_est_str = y_to_classname[y_est] if y_to_classname is not None else str(y_est)
 
-        fn = 'image%05d_y%02d_%s.png' % (idx, y_true, y_true_str)
+        fn = 'image_%05d_y%02d_%s.png' % (idx, y_true, y_true_str)
 
         if y_true == y_est:
             out_dir = os.path.join(correct_dir, y_est_str)
@@ -379,7 +402,9 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     """ Generates AE for the LISA-CNN.
         Assumes you have already run train_lisa_cnn() to train the network.
     """
-    epsilon_values_pct = [.02, .05, .1, .15, .2]
+    epsilon_map = {np.inf : [.02, .05, .075, .1, .15, .2],   # assumes values in [0,1]
+                        1 :      [.1, 1, 10], 
+                        2 :      [.1, 1, 10]}
 
     #--------------------------------------------------
     # data set prep
@@ -397,7 +422,7 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
 
     # bound the perturbation
     c_max = np.max(X_test)
-    epsilon_values = np.array(epsilon_values_pct) * c_max
+    assert(c_max <= 1.0) # assuming this for now
 
     #--------------------------------------------------
     # Initialize model that we will attack
@@ -426,66 +451,109 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     #--------------------------------------------------
     # symbolic representation of attack
     attack = FastGradientMethod(model, sess=sess)
-    acc_all_fgm = np.zeros((len(epsilon_values),))
+    acc_fgm = {}
+    acc_tgt_fgm = {}
 
-    for idx, epsilon in enumerate(epsilon_values):
-        x_adv_tf = attack.generate(x_tf, eps=epsilon, y_target=Y_target_OB, clip_min=0.0, clip_max=c_max)
+    for ord in [np.inf, 1, 2]:
+        epsilon_values = epsilon_map[ord]
+        acc_fgm[ord] = []
+        acc_tgt_fgm[ord] = []
 
-        if Y_target is not None:
-            X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_target, FLAGS.batch_size)
-        else:
-            X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_test, FLAGS.batch_size)
+        for idx, epsilon in enumerate(epsilon_values):
+            desc = 'FGM-ell%s-%0.3f' % (ord, epsilon)
 
-        #
-        # Evaluate the AE. 
-        # Currently using the same model we originally attacked.
-        #
-        model_eval = model
-        preds_tf = model_eval(x_tf)
-        preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
-        print('Test accuracy after FGM attack: %0.2f' % calc_acc(Y_test, preds))
-        print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
-        print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
+            x_adv_tf = attack.generate(x_tf, eps=epsilon, y_target=Y_target_OB, clip_min=0.0, clip_max=c_max, ord=ord)
 
-        save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/FGM_%0.2f' % epsilon, subimage.LISA_17_CLASSES)
-        acc_all_fgm[idx] = calc_acc(Y_test, preds)
+            if Y_target is not None:
+                X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_target, FLAGS.batch_size)
+            else:
+                X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_test, FLAGS.batch_size)
+
+            #
+            # Evaluate the AE. 
+            # Currently using the same model we originally attacked.
+            #
+            model_eval = model
+            preds_tf = model_eval(x_tf)
+            preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
+            acc, acc_tgt = analyze_ae(X_test, X_adv, Y_test, preds, desc, y_target)
+
+            save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/%s' % desc, subimage.LISA_17_CLASSES)
+            save_images_and_estimates(X_test - X_adv, Y_test, preds, 'output/Deltas/%s' % desc, subimage.LISA_17_CLASSES)
+            acc_fgm[ord].append(acc)
+            acc_tgt_fgm[ord].append(acc_tgt)
+
 
     #--------------------------------------------------
     # Iterative attack
     #--------------------------------------------------
     attack = BasicIterativeMethod(model, sess=sess)
-    acc_all_ifgm = np.zeros((len(epsilon_values),))
+    acc_ifgm = {}
+    acc_tgt_ifgm = {}
 
-    for idx, epsilon in enumerate(epsilon_values):
-        x_adv_tf = attack.generate(x_tf, eps=epsilon, 
-                                     eps_iter=epsilon/4., 
-                                     nb_iter=100,
-                                     y_target=Y_target_OB, 
-                                     clip_min=0.0,
-                                     clip_max=c_max)
+    for ord in [np.inf, 1, 2]:
+        epsilon_values = epsilon_map[ord]
+        acc_ifgm[ord] = []
+        acc_tgt_ifgm[ord] = []
 
-        #
-        # Run the attack (targeted or untargeted)
-        # on the test data.
-        #
-        if Y_target is not None:
-            X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_target, FLAGS.batch_size)
-        else:
-            X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_test, FLAGS.batch_size)
+        for idx, epsilon in enumerate(epsilon_values):
+            desc = 'I-FGM-ell%s-%0.3f' % (ord, epsilon)
 
-        #
-        # Evaluate the AE. 
-        # Currently using the same model we originally attacked.
-        #
-        model_eval = model
-        preds_tf = model_eval(x_tf)
-        preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
-        print('Test accuracy after I-FGM attack: %0.2f' % calc_acc(Y_test, preds))
-        print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
-        print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
+            x_adv_tf = attack.generate(x_tf, eps=epsilon, 
+                                         eps_iter=epsilon/4., 
+                                         nb_iter=100,
+                                         y_target=Y_target_OB, 
+                                         clip_min=0.0,
+                                         clip_max=c_max)
 
-        save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/Iterative_FGM_%0.2f' % epsilon, subimage.LISA_17_CLASSES)
-        acc_all_ifgm[idx] = calc_acc(Y_test, preds)
+            #
+            # Run the attack (targeted or untargeted)
+            # on the test data.
+            #
+            if Y_target is not None:
+                X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_target, FLAGS.batch_size)
+            else:
+                X_adv = run_in_batches(sess, x_tf, y_tf, x_adv_tf, X_test, Y_test, FLAGS.batch_size)
+
+            #
+            # Evaluate the AE. 
+            # Currently using the same model we originally attacked.
+            #
+            model_eval = model
+            preds_tf = model_eval(x_tf)
+            preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
+            acc, acc_tgt = analyze_ae(X_test, X_adv, Y_test, preds, desc, y_target)
+
+            save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/%s' % desc, subimage.LISA_17_CLASSES)
+            save_images_and_estimates(X_test - X_adv, Y_test, preds, 'output/Deltas/%s' % desc, subimage.LISA_17_CLASSES)
+            acc_ifgm[ord].append(acc)
+            acc_tgt_ifgm[ord].append(acc_tgt)
+
+
+    #--------------------------------------------------
+    # Post-attack Analysis for *FGM
+    #--------------------------------------------------
+    for ord in [np.inf, 1, 2]:
+        pdb.set_trace() # TEMP
+        plt.plot(epsilon_map[ord], acc_fgm[ord], 'o-', label='FGM')
+        plt.plot(epsilon_map[ord], acc_ifgm[ord], 'o-', label='I-FGM')
+        plt.legend()
+        plt.xlabel('epsilon')
+        plt.ylabel('CNN accuracy')
+        plt.title('ell_%s' % ord)
+        plt.grid('on')
+        plt.savefig('./output/attack_accuracy_%s.png' % ord, bbox_inches='tight')
+
+        plt.plot(epsilon_map[ord], acc_tgt_fgm[ord], 'o-', label='FGM')
+        plt.plot(epsilon_map[ord], acc_tgt_ifgm[ord], 'o-', label='I-FGM')
+        plt.legend()
+        plt.xlabel('epsilon')
+        plt.ylabel('Targeted AE Success Rate')
+        plt.title('ell_%s' % ord)
+        plt.grid('on')
+        plt.savefig('./output/targeted_attack_accuracy_%s.png' % ord, bbox_inches='tight')
+
+
 
 
     #--------------------------------------------------
@@ -493,10 +561,11 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
     # Note: this attack takes awhile to compute...(compared to *FGSM)
     #--------------------------------------------------
     attack = ElasticNetMethod(model, sess=sess)
-    c_vals = [0.1, 1, 10, 1e2]
+    c_vals = [1e-2, 1e-1, 1, 1e2, 1e4]
     acc_all_elastic = np.zeros((len(c_vals),))
 
-    for idx, c in enumerate(c_vals):
+    if 0:   # turn off for now, is slow
+    #for idx, c in enumerate(c_vals):
         x_adv_tf = attack.generate(x_tf, 
                                    batch_size=FLAGS.batch_size,
                                    y_target=Y_target_OB, 
@@ -523,13 +592,13 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
         preds_tf = model_eval(x_tf)
         preds = run_in_batches(sess, x_tf, y_tf, preds_tf, X_adv, Y_test, FLAGS.batch_size)
         print('Test accuracy after E-Net attack: %0.2f' % calc_acc(Y_test, preds))
-        print('Maximum per-pixel delta: %0.1f' % np.max(np.abs(X_test - X_adv)))
-        print('Mean per-pixel delta: %0.1f' % np.mean(np.abs(X_test - X_adv)))
+        print('Maximum per-pixel delta: %0.3f' % np.max(np.abs(X_test - X_adv)))
+        print('Mean per-pixel delta: %0.3f' % np.mean(np.abs(X_test - X_adv)))
         print('l2: ', np.sqrt(np.sum((X_test - X_adv)**2)))
         print('l1: ', np.sum(np.abs(X_test - X_adv)))
         print(confusion_matrix(np.argmax(Y_test, axis=1), np.argmax(preds, axis=1)))
 
-        save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/Elastic_c%02d' % c, subimage.LISA_17_CLASSES)
+        save_images_and_estimates(X_adv, Y_test, preds, 'output/Images/Elastic_c%03d' % c, subimage.LISA_17_CLASSES)
         acc_all_elastic[idx] = calc_acc(Y_test, preds)
 
 
@@ -578,17 +647,6 @@ def attack_lisa_cnn(sess, cnn_weight_file, y_target=None):
         attack = CarliniWagnerL2(model, sess=sess)
         x_adv_tf = attack.generate(x_tf, confidence=.1, y_target=Y_target_OB)
 
-
-    #--------------------------------------------------
-    # Post-attack Analysis (ell infty attacks)
-    #--------------------------------------------------
-    plt.plot(epsilon_values, acc_all_fgm, 'o-', label='FGM')
-    plt.plot(epsilon_values, acc_all_ifgm, 'o-', label='I-FGM')
-    plt.legend()
-    plt.xlabel('epsilon')
-    plt.ylabel('CNN accuracy')
-    plt.grid('on')
-    plt.savefig('./output/attack_accuracy_plot.png', bbox_inches='tight')
 
 
 
