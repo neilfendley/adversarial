@@ -36,6 +36,10 @@ if __name__ == "__main__":
     sub_images = []
     image_ids = []
     for fn in file_names:
+        # don't try to process full images if they already exist
+        if 'full_image' in fn:
+            continue
+
         im = Image.open(fn)
         head, tail = os.path.split(fn)
 
