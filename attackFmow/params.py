@@ -52,7 +52,7 @@ lstm_loss = 'categorical_crossentropy'
 
 #DIRECTORIES AND FILES
 directories = {}
-#directories['dataset'] = '/home/fendlnm1/Fendley/adversarial/val'
+directories['dataset'] = '/home/neilf/Fendley/adversarial/val'
 directories['data'] = os.path.join('./', 'data')
 directories['cache'] = os.path.join(directories['data'], 'cache')
 

@@ -1,13 +1,19 @@
 import os
+from keras.utils.np_utils import to_categorical
 import cv2
+from keras.preprocessing import image
+from keras.preprocessing import image
 import json 
+import params
+import numpy as np
+import random
 
-def prep_image(filepath):
+
+def prep_image(filepath, train_dir):
     filename = os.path.basename(filepath)
     jsonData = json.load(open(filepath))
     img_filename = filepath[:-5] + '.jpg' 
     basename = os.path.basename(img_filename[:-4])
-    train_dir = 'train/'
     allResults = []
     allCats = []
     for bb in jsonData['bounding_boxes']:
@@ -91,14 +97,10 @@ def prep_image(filepath):
         else:
             return None, category
 
-def load_from_full()
-    model = cnn_model()
-    model.load_weights('cnn_image_only.model')
-    model.compile(loss='categorical_crossentropy', optimizer='SGD',metrics=['accuracy'])
-    if not os.path.exists('all_filenames.npy'):
+def load_from_full(data_dir,train_dir='train/'):
+    if not os.path.exists(os.path.join(train_dir,'fmow_all_filenames.npy')):
         all_jsons = []
         counter = 0
-        data_dir = params.directories['dataset']
         cats = os.listdir(data_dir)
         for cat in cats:
             cat_folder = os.path.join(data_dir,cat)
@@ -107,34 +109,19 @@ def load_from_full()
                 direc = os.path.join(cat_folder,folder)
                 for filename in os.listdir(direc):
                     if filename.endswith('.json'):
-                        all_jsons.append(os.path.join(direc,filename))
-        all_jsons= np.asarray(all_jsons)
+                        final_path = os.path.join(direc,filename)
+                        all_jsons.append(final_path)
+                        x,y = prep_image(final_path,train_dir)
+        all_jsons = np.asarray(all_jsons)
         random.shuffle(all_jsons)
-        np.save('all_filenames.npy', all_jsons)
+        np.save((os.path.join(train_dir,'fmow_all_filenames.npy')), all_jsons)
     else:
-        all_jsons = np.load('all_filenames.npy')
-    batch_size = 1028
-    j = 0
-    scores = []
-    print("Preparing to train")
-    print(len(all_jsons))
-    while j < len(all_jsons):
-        xTrain = np.zeros((0, 224,224,3))
-        yTrain = np.zeros((0,1,63))
-        for i in range(batch_size):
-            if j < len(all_jsons): 
-                x, y = prep_image(all_jsons[j])
-                if x is not None:
-                    xTrain = np.concatenate((xTrain, x), axis=0)
-                    yTrain = np.concatenate((yTrain, y), axis=0)
-                j += 1 
-        #yTrain = np.squeeze(yTrain)
-        #xTrain = imagenet_utils.preprocess_input(xTrain)
-        #xTrain = xTrain / 255.0
-        #model.fit(xTrain, yTrain, batch_size=32, epochs=10)
-        #score, exp = compare(model, xTrain, yTrain)
-        #scores.append((score, exp))
- 
-    model.save('new_weights.hdf5')
+        all_jsons = np.load(os.path.join(train_dir,'fmow_all_filenames.npy'))
+    
+if __name__ == '__main__':
+    os.environ['CUDA_VISIBLE_DEVICES'] = "0"
+    data_dir = params.directories['dataset']
+    load_from_full(data_dir)
+
 
 
